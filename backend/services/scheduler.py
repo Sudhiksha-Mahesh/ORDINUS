@@ -65,6 +65,8 @@ def backtrack_schedule(
         SubjectDemand(subj_id, fac_id, hrs)
         for (subj_id, fac_id), hrs in demands_map.items()
     ]
+    # Try most-constrained first (most hours) to improve backtracking success
+    demand_list.sort(key=lambda x: -x.hours_remaining)
     result: list[SlotAssignment] = []
 
     def solve(cell_index: int) -> bool:
@@ -88,6 +90,7 @@ def backtrack_schedule(
             # Backtrack
             d.hours_remaining += 1
             result.pop()
+        # No demand fits this cell; leave empty and continue (valid if total_hours < total_slots)
         return solve(cell_index + 1)
 
     if solve(0):

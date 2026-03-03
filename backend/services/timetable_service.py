@@ -65,6 +65,14 @@ async def generate_timetable_for_class(db: AsyncSession, class_id: int) -> list[
         )
 
     availability = await _get_faculty_availability_for_scheduling(db)
+    # Faculty with no availability set: treat as available in all class slots
+    # so generation can succeed without requiring every faculty to set availability.
+    all_slots = [(d, s) for d in range(working_days) for s in range(slots_per_day)]
+    faculty_ids_needed = {d.faculty_id for d in demands}
+    for fid in faculty_ids_needed:
+        if fid not in availability or not availability[fid]:
+            availability[fid] = list(all_slots)
+
     assignments = backtrack_schedule(
         working_days=working_days,
         slots_per_day=slots_per_day,
