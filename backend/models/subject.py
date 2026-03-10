@@ -8,17 +8,34 @@ from core.database import Base
 
 
 class Subject(Base):
-    """Subject taught by a faculty member."""
+    """Subject taught by faculty. type: theory (1 faculty) or lab (2 faculty via SubjectFacultyAllocation)."""
 
     __tablename__ = "subjects"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     name = Column(String(255), nullable=False, index=True)
+    type = Column(String(20), nullable=False, default="theory", server_default="theory")  # "theory" | "lab"
     faculty_id = Column(Integer, ForeignKey("faculties.id", ondelete="SET NULL"), nullable=True, index=True)
 
     faculty = relationship("Faculty", back_populates="subjects")
     class_subjects = relationship("ClassSubject", back_populates="subject", cascade="all, delete-orphan")
+    faculty_allocations = relationship("SubjectFacultyAllocation", back_populates="subject", cascade="all, delete-orphan")
     timetable_entries = relationship("Timetable", back_populates="subject")
+
+
+class SubjectFacultyAllocation(Base):
+    """Lab subjects: multiple faculty per subject. theory uses Subject.faculty_id only."""
+
+    __tablename__ = "subject_faculty_allocations"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    subject_id = Column(Integer, ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
+    faculty_id = Column(Integer, ForeignKey("faculties.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    __table_args__ = (UniqueConstraint("subject_id", "faculty_id", name="uq_subject_faculty"),)
+
+    subject = relationship("Subject", back_populates="faculty_allocations")
+    faculty = relationship("Faculty", backref="subject_allocations")
 
 
 class ClassSubject(Base):

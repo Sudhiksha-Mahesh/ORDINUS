@@ -28,6 +28,7 @@ async def list_subjects(db: AsyncSession = Depends(get_db)):
         SubjectWithFacultyResponse(
             id=s.id,
             name=s.name,
+            type=getattr(s, "type", "theory"),
             faculty_id=s.faculty_id,
             faculty_name=s.faculty.name if s.faculty else None,
         )

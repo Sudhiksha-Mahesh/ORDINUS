@@ -9,6 +9,7 @@ class SubjectBase(BaseModel):
     """Base schema for subject."""
 
     name: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(default="theory", pattern="^(theory|lab)$")
     faculty_id: Optional[int] = None
 
 
@@ -22,6 +23,7 @@ class SubjectUpdate(BaseModel):
     """Schema for updating a subject."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
+    type: Optional[str] = Field(None, pattern="^(theory|lab)$")
     faculty_id: Optional[int] = None
 
 

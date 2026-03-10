@@ -51,3 +51,12 @@ class GenerateTimetableRequest(BaseModel):
     """Request to generate timetable (e.g. for which class)."""
 
     class_id: int = Field(..., description="Class for which to generate timetable")
+
+
+class GenerateTimetableGARequest(BaseModel):
+    """Request for GA-based timetable generation."""
+
+    class_id: int = Field(..., description="Class for which to generate timetable")
+    population_size: int = Field(default=80, ge=20, le=200)
+    generations: int = Field(default=300, ge=100, le=500)
+    seed: int | None = Field(default=42, description="Random seed for reproducibility")

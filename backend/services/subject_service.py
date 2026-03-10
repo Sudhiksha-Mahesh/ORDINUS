@@ -32,7 +32,7 @@ async def get_subject_by_id(db: AsyncSession, subject_id: int) -> Subject | None
 
 async def create_subject(db: AsyncSession, data: SubjectCreate) -> Subject:
     """Create a new subject."""
-    subject = Subject(name=data.name, faculty_id=data.faculty_id)
+    subject = Subject(name=data.name, type=getattr(data, "type", "theory"), faculty_id=data.faculty_id)
     db.add(subject)
     await db.flush()
     await db.refresh(subject)
@@ -46,6 +46,8 @@ async def update_subject(db: AsyncSession, subject_id: int, data: SubjectUpdate)
         return None
     if data.name is not None:
         subject.name = data.name
+    if getattr(data, "type", None) is not None:
+        subject.type = data.type
     if data.faculty_id is not None:
         subject.faculty_id = data.faculty_id
     await db.flush()

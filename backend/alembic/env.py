@@ -10,7 +10,16 @@ from alembic import context
 
 from core.config import settings
 from core.database import Base
-from models import Faculty, FacultyAvailability, Class, Subject, ClassSubject, Timetable  # noqa: F401
+from models import (  # noqa: F401
+    Faculty,
+    FacultyAvailability,
+    Class,
+    Subject,
+    ClassSubject,
+    SubjectFacultyAllocation,
+    ExtraClass,
+    Timetable,
+)
 
 config = context.config
 database_url = settings.DATABASE_URL

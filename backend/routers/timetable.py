@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from schemas.timetable import GenerateTimetableRequest, TimetableGridResponse
+from schemas.timetable import (
+    GenerateTimetableRequest,
+    GenerateTimetableGARequest,
+    TimetableGridResponse,
+)
 from services import timetable_service as svc
 
 router = APIRouter(prefix="/timetable", tags=["Timetable"])
@@ -27,6 +31,32 @@ async def generate_timetable(
             detail="Generation failed: check class, subjects, faculty assignment, and faculty availability.",
         )
     return {"success": True, "message": f"Generated {len(entries)} slots.", "class_id": body.class_id}
+
+
+@router.post("/generate-ga", response_model=dict)
+async def generate_timetable_ga(
+    body: GenerateTimetableGARequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate timetable using Genetic Algorithm.
+    Returns { "Monday": [ {"name": "Math", "faculty": ["Staff1"]}, ... ], ... }.
+    Theory: 3 hrs/week max 1/day, 1 faculty. Lab: 4 hrs as 2+2 consecutive, 2 faculty.
+    Extra classes by hours_per_week. Persists to DB.
+    """
+    result = await svc.generate_timetable_ga(
+        db,
+        body.class_id,
+        population_size=body.population_size,
+        generations=body.generations,
+        seed=body.seed,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="GA generation failed: check class, subjects (theory/lab with faculty/allocations), extra classes, and faculty availability.",
+        )
+    return result
 
 
 @router.get("/{class_id}", response_model=TimetableGridResponse)

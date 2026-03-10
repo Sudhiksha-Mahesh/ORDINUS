@@ -19,4 +19,5 @@ class Class(Base):
 
     # Relationships
     class_subjects = relationship("ClassSubject", back_populates="class_", cascade="all, delete-orphan")
+    extra_classes = relationship("ExtraClass", back_populates="class_", cascade="all, delete-orphan")
     timetables = relationship("Timetable", back_populates="class_", cascade="all, delete-orphan")
