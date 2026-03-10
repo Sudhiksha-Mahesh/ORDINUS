@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import { AlertTriangle, ArrowLeft, Info } from 'lucide-react'
 import { timetableApi, type TimetableGrid } from '../services/api'
+import { Card, CardContent, CardHeader } from '../components/ui/Card'
+import { Button } from '../components/ui/Button'
+import { cn } from '../utils/cn'
 
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -9,6 +13,24 @@ export default function ViewTimetable() {
   const [data, setData] = useState<TimetableGrid | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const repeatedFacultyByDay = useMemo(() => {
+    const grid = data?.grid ?? []
+    const map = new Map<number, Set<string>>()
+    grid.forEach((row, dayIndex) => {
+      const counts = new Map<string, number>()
+      row.forEach((cell) => {
+        if (!cell?.faculty_name) return
+        counts.set(cell.faculty_name, (counts.get(cell.faculty_name) || 0) + 1)
+      })
+      const repeated = new Set<string>()
+      counts.forEach((count, name) => {
+        if (count > 1) repeated.add(name)
+      })
+      map.set(dayIndex, repeated)
+    })
+    return map
+  }, [data?.grid])
 
   useEffect(() => {
     if (!classId) return
@@ -41,49 +63,121 @@ export default function ViewTimetable() {
   if (!data) return null
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold text-slate-800">Timetable – {data.class_name}</h1>
-        <Link to="/generate" className="text-primary-700 font-medium hover:underline">Generate / Back</Link>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Timetable</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Class: <span className="font-semibold text-slate-900">{data.class_name}</span> · Days: {data.working_days} · Slots/day: {data.slots_per_day}
+          </p>
+        </div>
+        <Link to="/generate" className="inline-flex">
+          <Button variant="outline">
+            <ArrowLeft className="h-4 w-4" />
+            Back to Generate
+          </Button>
+        </Link>
       </div>
-      <p className="text-slate-600 mb-4">
-        Rows = days, Columns = slots. Each cell shows subject and faculty.
-      </p>
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-x-auto">
-        <table className="w-full border-collapse min-w-[600px]">
-          <thead>
-            <tr className="bg-slate-100">
-              <th className="border border-slate-200 p-2 text-left font-medium text-slate-700 w-28">Day</th>
-              {Array.from({ length: data.slots_per_day }, (_, i) => (
-                <th key={i} className="border border-slate-200 p-2 text-center font-medium text-slate-700">
-                  Slot {i + 1}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.grid.map((row, dayIndex) => (
-              <tr key={dayIndex} className="hover:bg-slate-50">
-                <td className="border border-slate-200 p-2 font-medium text-slate-700">
-                  {DAY_NAMES[dayIndex] ?? `Day ${dayIndex + 1}`}
-                </td>
-                {row.map((cell, slotIndex) => (
-                  <td key={slotIndex} className="border border-slate-200 p-3 align-top">
-                    {cell ? (
-                      <div className="text-sm">
-                        <div className="font-medium text-slate-800">{cell.subject_name}</div>
-                        <div className="text-slate-600">{cell.faculty_name}</div>
-                      </div>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
-                  </td>
+
+      <Card>
+        <CardHeader
+          title="Schedule grid"
+          description={
+            <span className="inline-flex flex-wrap items-center gap-x-4 gap-y-2">
+              <span className="inline-flex items-center gap-2">
+                <span className="h-3 w-3 rounded bg-slate-100 ring-1 ring-inset ring-slate-200" />
+                <span>Empty slot</span>
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <span className="h-3 w-3 rounded bg-amber-100 ring-1 ring-inset ring-amber-200" />
+                <span>Repeated faculty (review)</span>
+              </span>
+              <span className="inline-flex items-center gap-2 text-slate-500">
+                <Info className="h-4 w-4" />
+                Hover cells for clarity
+              </span>
+            </span>
+          }
+          actions={
+            <div className="hidden sm:flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              Conflict highlighting depends on backend data; repeated faculty is a heuristic.
+            </div>
+          }
+        />
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="min-w-[760px] w-full border-separate border-spacing-0 text-sm">
+              <thead className="sticky top-0 z-10">
+                <tr>
+                  <th className="sticky left-0 z-20 bg-white border-b border-slate-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600 w-40">
+                    Day
+                  </th>
+                  {Array.from({ length: data.slots_per_day }, (_, i) => (
+                    <th
+                      key={i}
+                      className="bg-white border-b border-slate-200 px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-slate-600"
+                    >
+                      Slot {i + 1}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.grid.map((row, dayIndex) => (
+                  <tr key={dayIndex} className="group">
+                    <td className="sticky left-0 z-10 bg-white border-b border-slate-200 px-4 py-3 font-semibold text-slate-900">
+                      {DAY_NAMES[dayIndex] ?? `Day ${dayIndex + 1}`}
+                    </td>
+                    {row.map((cell, slotIndex) => {
+                      const repeatedSet = repeatedFacultyByDay.get(dayIndex) || new Set<string>()
+                      const isRepeatedFaculty = Boolean(cell?.faculty_name && repeatedSet.has(cell.faculty_name))
+                      const isEmpty = !cell
+                      return (
+                        <td
+                          key={slotIndex}
+                          className={cn(
+                            'border-b border-slate-200 px-3 py-3 align-top transition',
+                            'group-hover:bg-slate-50/50',
+                            isEmpty ? 'bg-slate-50' : 'bg-white',
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              'h-full rounded-xl p-3 ring-1 ring-inset transition',
+                              isEmpty
+                                ? 'bg-slate-100/40 ring-slate-200 border border-dashed border-slate-200'
+                                : isRepeatedFaculty
+                                  ? 'bg-amber-50 ring-amber-200'
+                                  : 'bg-white ring-slate-200 hover:ring-indigo-200 hover:bg-indigo-50/30',
+                            )}
+                            title={
+                              cell
+                                ? `${cell.subject_name} — ${cell.faculty_name}`
+                                : 'Empty slot'
+                            }
+                          >
+                            {cell ? (
+                              <div className="space-y-1">
+                                <div className="font-semibold text-slate-900 leading-snug">{cell.subject_name}</div>
+                                <div className={cn('text-xs leading-snug', isRepeatedFaculty ? 'text-amber-900' : 'text-slate-600')}>
+                                  {cell.faculty_name}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-xs font-medium text-slate-500">Empty</div>
+                            )}
+                          </div>
+                        </td>
+                      )
+                    })}
+                  </tr>
                 ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
