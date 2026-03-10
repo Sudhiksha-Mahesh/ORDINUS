@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { ArrowRight, Wand2 } from 'lucide-react'
 import { classApi, timetableApi, type Class } from '../services/api'
+import { Card, CardContent, CardHeader } from '../components/ui/Card'
+import { Button } from '../components/ui/Button'
+import { Field, Select } from '../components/ui/Form'
 
 export default function GenerateTimetable() {
   const [classes, setClasses] = useState<Class[]>([])
@@ -30,51 +34,64 @@ export default function GenerateTimetable() {
   }
 
   return (
-    <div>
-      <h1 className="text-2xl font-semibold text-slate-800 mb-2">Generate Timetable</h1>
-      <p className="text-slate-600 mb-6">
-        Select a class and run the backtracking scheduler. Ensure faculty, subjects, and faculty availability are configured.
-      </p>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Generate Timetable</h1>
+        <p className="mt-1 text-sm text-slate-600">
+          Select a class and run the scheduler. Make sure faculty, subjects, class subjects (hours/week), and availability are configured.
+        </p>
+      </div>
 
-      <form onSubmit={handleGenerate} className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm max-w-md">
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-slate-700 mb-2">Class</label>
-          <select
-            value={selectedClassId ?? ''}
-            onChange={(e) => setSelectedClassId(e.target.value ? Number(e.target.value) : null)}
-            className="border border-slate-300 rounded px-3 py-2 w-full"
-            required
-          >
-            <option value="">— Select class —</option>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </div>
-        {message && (
-          <p className={`mb-4 text-sm ${message.startsWith('Generated') ? 'text-green-700' : 'text-red-600'}`}>
-            {message}
-          </p>
-        )}
-        <div className="flex gap-3">
-          <button
-            type="submit"
-            disabled={loading || selectedClassId == null}
-            className="px-4 py-2 bg-primary-700 text-white rounded font-medium hover:bg-primary-800 disabled:opacity-50"
-          >
-            {loading ? 'Generating…' : 'Generate'}
-          </button>
-          {selectedClassId != null && (
-            <button
-              type="button"
-              onClick={() => navigate(`/timetable/${selectedClassId}`)}
-              className="px-4 py-2 border border-slate-300 rounded text-slate-700 hover:bg-slate-50"
-            >
-              View current timetable
-            </button>
-          )}
-        </div>
-      </form>
+      <Card className="max-w-2xl">
+        <CardHeader
+          title="Generation"
+          description="This triggers the backend generator and then opens the timetable view."
+        />
+        <CardContent className="p-6 space-y-4">
+          <form onSubmit={handleGenerate} className="space-y-4">
+            <Field label="Class" required>
+              <Select
+                value={selectedClassId ?? ''}
+                onChange={(e) => setSelectedClassId(e.target.value ? Number(e.target.value) : null)}
+                required
+              >
+                <option value="">— Select class —</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            {message ? (
+              <div
+                className={[
+                  'rounded-xl border p-3 text-sm',
+                  message.startsWith('Generated')
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                    : 'border-rose-200 bg-rose-50 text-rose-900',
+                ].join(' ')}
+              >
+                {message}
+              </div>
+            ) : null}
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button type="submit" disabled={loading || selectedClassId == null}>
+                <Wand2 className="h-4 w-4" />
+                {loading ? 'Generating…' : 'Generate'}
+              </Button>
+              {selectedClassId != null ? (
+                <Button variant="outline" type="button" onClick={() => navigate(`/timetable/${selectedClassId}`)}>
+                  View current timetable
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   )
 }
