@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, Wand2 } from 'lucide-react'
+import { ArrowRight, Sparkles, Wand2 } from 'lucide-react'
 import { classApi, timetableApi, type Class } from '../services/api'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -9,7 +9,8 @@ import { Field, Select } from '../components/ui/Form'
 export default function GenerateTimetable() {
   const [classes, setClasses] = useState<Class[]>([])
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loadingStandard, setLoadingStandard] = useState(false)
+  const [loadingGA, setLoadingGA] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const navigate = useNavigate()
 
@@ -17,10 +18,10 @@ export default function GenerateTimetable() {
     classApi.list().then(setClasses).catch(() => setClasses([]))
   }, [])
 
-  const handleGenerate = (e: React.FormEvent) => {
+  const handleGenerateStandard = (e: React.FormEvent) => {
     e.preventDefault()
     if (selectedClassId == null) return
-    setLoading(true)
+    setLoadingStandard(true)
     setMessage(null)
     timetableApi.generate(selectedClassId)
       .then((res) => {
@@ -30,7 +31,28 @@ export default function GenerateTimetable() {
       .catch((err) => {
         setMessage(err.message || 'Generation failed.')
       })
-      .finally(() => setLoading(false))
+      .finally(() => setLoadingStandard(false))
+  }
+
+  const handleGenerateGA = () => {
+    if (selectedClassId == null) return
+    setLoadingGA(true)
+    setMessage(null)
+    timetableApi
+      .generateGA({
+        class_id: selectedClassId,
+        population_size: 80,
+        generations: 300,
+        seed: 42,
+      })
+      .then(() => {
+        setMessage('Generated using Genetic Algorithm.')
+        navigate(`/timetable/${selectedClassId}`)
+      })
+      .catch((err) => {
+        setMessage(err.message || 'GA generation failed.')
+      })
+      .finally(() => setLoadingGA(false))
   }
 
   return (
@@ -38,17 +60,17 @@ export default function GenerateTimetable() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Generate Timetable</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Select a class and run the scheduler. Make sure faculty, subjects, class subjects (hours/week), and availability are configured.
+          Select a class and run the scheduler. Use Genetic Algorithm generation to enforce subject-type rules (theory/lab blocks) more strictly.
         </p>
       </div>
 
       <Card className="max-w-2xl">
         <CardHeader
           title="Generation"
-          description="This triggers the backend generator and then opens the timetable view."
+          description="Choose a generator. Both options open the same timetable view once complete."
         />
         <CardContent className="p-6 space-y-4">
-          <form onSubmit={handleGenerate} className="space-y-4">
+          <form onSubmit={handleGenerateStandard} className="space-y-4">
             <Field label="Class" required>
               <Select
                 value={selectedClassId ?? ''}
@@ -77,10 +99,19 @@ export default function GenerateTimetable() {
               </div>
             ) : null}
 
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Button type="submit" disabled={loading || selectedClassId == null}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Button type="submit" disabled={loadingStandard || loadingGA || selectedClassId == null}>
                 <Wand2 className="h-4 w-4" />
-                {loading ? 'Generating…' : 'Generate'}
+                {loadingStandard ? 'Generating…' : 'Generate (Standard)'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleGenerateGA}
+                disabled={loadingStandard || loadingGA || selectedClassId == null}
+              >
+                <Sparkles className="h-4 w-4" />
+                {loadingGA ? 'Generating…' : 'Generate (GA)'}
               </Button>
               {selectedClassId != null ? (
                 <Button variant="outline" type="button" onClick={() => navigate(`/timetable/${selectedClassId}`)}>
@@ -88,6 +119,9 @@ export default function GenerateTimetable() {
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               ) : null}
+            </div>
+            <div className="text-xs text-slate-600">
+              GA defaults: population 80 · generations 300 · seed 42
             </div>
           </form>
         </CardContent>

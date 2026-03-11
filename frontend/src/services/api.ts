@@ -76,6 +76,16 @@ export interface TimetableGrid {
   grid: (TimetableCell | null)[][]
 }
 
+export interface GenerateTimetableGAParams {
+  class_id: number
+  population_size?: number
+  generations?: number
+  seed?: number | null
+}
+
+export type TimetableGeneratedDay = { name: string; faculty: string[] }
+export type TimetableGenerated = Record<string, TimetableGeneratedDay[]>
+
 // Faculty
 export const facultyApi = {
   list: () => request<Faculty[]>('/faculties'),
@@ -137,6 +147,11 @@ export const timetableApi = {
     request<{ success: boolean; message: string; class_id: number }>('/timetable/generate', {
       method: 'POST',
       body: JSON.stringify({ class_id: classId }),
+    }),
+  generateGA: (params: GenerateTimetableGAParams) =>
+    request<TimetableGenerated>('/timetable/generate-ga', {
+      method: 'POST',
+      body: JSON.stringify(params),
     }),
   get: (classId: number) => request<TimetableGrid>(`/timetable/${classId}`),
 }

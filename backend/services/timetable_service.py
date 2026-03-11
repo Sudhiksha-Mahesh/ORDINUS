@@ -220,7 +220,7 @@ async def generate_timetable_ga(
                 fids = [subj.faculty_id] + list(fids)
             if len(fids) < 2:
                 return None
-            lab_demands.append(LabDemand(subject_id=subj.id, faculty_ids=fids[:2], name=subj.name))
+            lab_demands.append(LabDemand(subject_id=subj.id, faculty_ids=(fids[0], fids[1]), name=subj.name))
 
     # Load extra classes for this class
     extra_result = await db.execute(
@@ -261,6 +261,23 @@ async def generate_timetable_ga(
             availability_list[d.faculty_id] = list(all_slots)
     availability_sets = {fid: set(av) for fid, av in availability_list.items()}
 
+    # Cross-class faculty usage map to penalize double booking:
+    # (day, slot) -> set(faculty_id)
+    other_entries_result = await db.execute(
+        select(Timetable).where(Timetable.class_id != class_id)
+    )
+    other_entries = list(other_entries_result.scalars().all())
+    faculty_used_elsewhere: dict[tuple[int, int], set[int]] = {}
+    for e in other_entries:
+        key = (e.day, e.slot)
+        s = faculty_used_elsewhere.setdefault(key, set())
+        if e.faculty_id:
+            s.add(e.faculty_id)
+        if e.faculty_ids:
+            for fid in e.faculty_ids:
+                if fid:
+                    s.add(fid)
+
     best = run_genetic_algorithm(
         working_days=working_days,
         slots_per_day=slots_per_day,
@@ -268,6 +285,7 @@ async def generate_timetable_ga(
         lab_demands=lab_demands,
         extra_demands=extra_demands,
         faculty_availability=availability_sets,
+        faculty_used_elsewhere=faculty_used_elsewhere,
         population_size=population_size,
         generations=generations,
         seed=seed,
