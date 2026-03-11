@@ -14,6 +14,7 @@ from schemas.subject import (
     ClassSubjectUpdate,
     ClassSubjectResponse,
     ClassSubjectDetailResponse,
+    LabFacultyUpdate,
 )
 from services import subject_service as svc
 
@@ -74,6 +75,24 @@ async def delete_subject(subject_id: int, db: AsyncSession = Depends(get_db)):
     ok = await svc.delete_subject(db, subject_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Subject not found")
+
+
+@router.put("/{subject_id}/lab-faculty", status_code=204)
+async def set_lab_faculty(
+    subject_id: int,
+    data: LabFacultyUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Define the two faculty who handle lab sessions for this subject.
+    Only valid when subject.type == 'lab'.
+    """
+    ok = await svc.set_subject_lab_faculty(db, subject_id, data.faculty_ids)
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to set lab faculty: subject not found, not a lab, or invalid faculty ids.",
+        )
 
 
 # --- Class-Subject (assign subject to class with hours) ---

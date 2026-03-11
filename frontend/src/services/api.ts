@@ -47,9 +47,12 @@ export interface Class {
   slots_per_day: number
 }
 
+export type SubjectType = 'theory' | 'lab'
+
 export interface Subject {
   id: number
   name: string
+  type?: SubjectType
   faculty_id?: number
   faculty_name?: string
 }
@@ -119,10 +122,15 @@ export const classApi = {
 export const subjectApi = {
   list: () => request<Subject[]>('/subjects'),
   get: (id: number) => request<Subject>(`/subjects/${id}`),
-  create: (body: { name: string; faculty_id?: number }) =>
+  create: (body: { name: string; type?: SubjectType; faculty_id?: number }) =>
     request<Subject>('/subjects', { method: 'POST', body: JSON.stringify(body) }),
-  update: (id: number, body: { name?: string; faculty_id?: number }) =>
+  update: (id: number, body: { name?: string; type?: SubjectType; faculty_id?: number }) =>
     request<Subject>(`/subjects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  setLabFaculty: (subjectId: number, facultyIds: number[]) =>
+    request<void>(`/subjects/${subjectId}/lab-faculty`, {
+      method: 'PUT',
+      body: JSON.stringify({ faculty_ids: facultyIds }),
+    }),
   delete: (id: number) =>
     request<void>(`/subjects/${id}`, { method: 'DELETE' }),
   listByClass: (classId: number) =>

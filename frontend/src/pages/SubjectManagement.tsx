@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Plus, Save, Trash2 } from 'lucide-react'
-import { subjectApi, classApi, facultyApi, type Subject, type Class, type ClassSubject, type Faculty } from '../services/api'
+import { subjectApi, classApi, facultyApi, type Subject, type Class, type ClassSubject, type Faculty, type SubjectType } from '../services/api'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Field, NumberInput, Select, TextInput } from '../components/ui/Form'
@@ -11,7 +11,19 @@ export default function SubjectManagement() {
   const [classes, setClasses] = useState<Class[]>([])
   const [faculties, setFaculties] = useState<Faculty[]>([])
   const [loading, setLoading] = useState(true)
-  const [form, setForm] = useState({ name: '', faculty_id: '' })
+  const [form, setForm] = useState<{
+    name: string
+    type: SubjectType
+    faculty_id: string
+    lab_faculty1: string
+    lab_faculty2: string
+  }>({
+    name: '',
+    type: 'theory',
+    faculty_id: '',
+    lab_faculty1: '',
+    lab_faculty2: '',
+  })
   const [editing, setEditing] = useState<Subject | null>(null)
   const [classSubjects, setClassSubjects] = useState<ClassSubject[]>([])
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null)
@@ -39,8 +51,38 @@ export default function SubjectManagement() {
     e.preventDefault()
     setSubjectSubmitAttempted(true)
     if (!form.name.trim()) return
-    subjectApi.create({ name: form.name.trim(), faculty_id: form.faculty_id ? Number(form.faculty_id) : undefined })
-      .then(() => { setForm({ name: '', faculty_id: '' }); loadSubjects() })
+    if (form.type === 'lab') {
+      if (!form.lab_faculty1 || !form.lab_faculty2) {
+        alert('Please select two faculty members for lab.')
+        return
+      }
+      if (form.lab_faculty1 === form.lab_faculty2) {
+        alert('Lab must be handled by two different faculty.')
+        return
+      }
+    }
+    subjectApi
+      .create({
+        name: form.name.trim(),
+        type: form.type,
+        faculty_id: form.faculty_id ? Number(form.faculty_id) : undefined,
+      })
+      .then(async (created) => {
+        if (form.type === 'lab') {
+          await subjectApi.setLabFaculty(created.id, [
+            Number(form.lab_faculty1),
+            Number(form.lab_faculty2),
+          ])
+        }
+        setForm({
+          name: '',
+          type: 'theory',
+          faculty_id: '',
+          lab_faculty1: '',
+          lab_faculty2: '',
+        })
+        loadSubjects()
+      })
       .catch((err) => alert(err.message))
   }
 
@@ -48,14 +90,51 @@ export default function SubjectManagement() {
     e.preventDefault()
     setSubjectSubmitAttempted(true)
     if (!editing) return
-    subjectApi.update(editing.id, { name: form.name.trim(), faculty_id: form.faculty_id ? Number(form.faculty_id) : undefined })
-      .then(() => { setEditing(null); setForm({ name: '', faculty_id: '' }); loadSubjects() })
+    if (form.type === 'lab') {
+      if (!form.lab_faculty1 || !form.lab_faculty2) {
+        alert('Please select two faculty members for lab.')
+        return
+      }
+      if (form.lab_faculty1 === form.lab_faculty2) {
+        alert('Lab must be handled by two different faculty.')
+        return
+      }
+    }
+    subjectApi
+      .update(editing.id, {
+        name: form.name.trim(),
+        type: form.type,
+        faculty_id: form.faculty_id ? Number(form.faculty_id) : undefined,
+      })
+      .then(async () => {
+        if (form.type === 'lab') {
+          await subjectApi.setLabFaculty(editing.id, [
+            Number(form.lab_faculty1),
+            Number(form.lab_faculty2),
+          ])
+        }
+        setEditing(null)
+        setForm({
+          name: '',
+          type: 'theory',
+          faculty_id: '',
+          lab_faculty1: '',
+          lab_faculty2: '',
+        })
+        loadSubjects()
+      })
       .catch((err) => alert(err.message))
   }
 
   const openEditSubject = (s: Subject) => {
     setEditing(s)
-    setForm({ name: s.name, faculty_id: s.faculty_id != null ? String(s.faculty_id) : '' })
+    setForm({
+      name: s.name,
+      type: (s.type as SubjectType) ?? 'theory',
+      faculty_id: s.faculty_id != null ? String(s.faculty_id) : '',
+      lab_faculty1: '',
+      lab_faculty2: '',
+    })
   }
 
   const handleAddToClass = (e: React.FormEvent) => {
@@ -99,7 +178,13 @@ export default function SubjectManagement() {
                     variant="ghost"
                     onClick={() => {
                       setEditing(null)
-                      setForm({ name: '', faculty_id: '' })
+                      setForm({
+                        name: '',
+                        type: 'theory',
+                        faculty_id: '',
+                        lab_faculty1: '',
+                        lab_faculty2: '',
+                      })
                       setSubjectSubmitAttempted(false)
                     }}
                   >
@@ -133,6 +218,53 @@ export default function SubjectManagement() {
                     ))}
                   </Select>
                 </Field>
+                <Field label="Type" required hint="Theory: 3h/week · Lab: 2×2 consecutive">
+                  <Select
+                    value={form.type}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, type: (e.target.value as SubjectType) || 'theory' }))
+                    }
+                  >
+                    <option value="theory">Theory</option>
+                    <option value="lab">Lab</option>
+                  </Select>
+                </Field>
+                {form.type === 'lab' && (
+                  <Field
+                    label="Lab faculty (2)"
+                    required
+                    hint="Select two different staff for lab sessions."
+                  >
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Select
+                        value={form.lab_faculty1}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, lab_faculty1: e.target.value }))
+                        }
+                      >
+                        <option value="">— Select staff 1 —</option>
+                        {faculties.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </Select>
+                      <Select
+                        value={form.lab_faculty2}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, lab_faculty2: e.target.value }))
+                        }
+                      >
+                        <option value="">— Select staff 2 —</option>
+                        {faculties.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  </Field>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit">
                     <Save className="h-4 w-4" />
@@ -158,6 +290,7 @@ export default function SubjectManagement() {
                   <THead>
                     <tr>
                       <TH>Subject</TH>
+                      <TH>Type</TH>
                       <TH>Faculty</TH>
                       <TH className="text-right">Actions</TH>
                     </tr>
@@ -166,6 +299,9 @@ export default function SubjectManagement() {
                     {subjects.map((s) => (
                       <TR key={s.id}>
                         <TD className="font-medium text-slate-900">{s.name}</TD>
+                        <TD className="text-xs font-medium uppercase tracking-wide text-slate-600">
+                          {(s.type ?? 'theory') === 'lab' ? 'LAB' : 'THEORY'}
+                        </TD>
                         <TD className="text-slate-600">{s.faculty_name || '—'}</TD>
                         <TD className="text-right">
                           <div className="inline-flex flex-wrap justify-end gap-2">

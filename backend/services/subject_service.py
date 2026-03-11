@@ -1,11 +1,11 @@
 """
 Subject and class-subject service layer.
 """
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from models.subject import Subject, ClassSubject
+from models.subject import Subject, ClassSubject, SubjectFacultyAllocation
 from schemas.subject import (
     SubjectCreate,
     SubjectUpdate,
@@ -61,6 +61,35 @@ async def delete_subject(db: AsyncSession, subject_id: int) -> bool:
     if not subject:
         return False
     await db.delete(subject)
+    await db.flush()
+    return True
+
+
+async def set_subject_lab_faculty(
+    db: AsyncSession,
+    subject_id: int,
+    faculty_ids: list[int],
+) -> bool:
+    """
+    Replace lab subject's faculty allocations with the provided faculty_ids.
+    Expects subject.type == 'lab' and at least two unique ids.
+    """
+    subject = await get_subject_by_id(db, subject_id)
+    if not subject or subject.type != "lab":
+        return False
+    # Ensure at least two unique faculty
+    unique_ids = list(dict.fromkeys(faculty_ids))  # preserve order, dedupe
+    if len(unique_ids) < 2:
+        return False
+    # Clear existing allocations
+    await db.execute(
+        delete(SubjectFacultyAllocation).where(
+            SubjectFacultyAllocation.subject_id == subject_id
+        )
+    )
+    # Insert new allocations
+    for fid in unique_ids:
+        db.add(SubjectFacultyAllocation(subject_id=subject_id, faculty_id=fid))
     await db.flush()
     return True
 

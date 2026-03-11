@@ -142,6 +142,45 @@ def _find_lab_blocks(grid: Chromosome, subject_id: int) -> list[list[DaySlot]]:
     return blocks
 
 
+def _lab_count_in_day(grid: Chromosome, subject_id: int, day: int) -> int:
+    return sum(1 for cell in grid[day] if cell and cell[0] == "lab" and cell[1] == subject_id)
+
+
+def _lab_blocks_valid(grid: Chromosome, subject_id: int) -> bool:
+    """Valid iff there are exactly two blocks and each block is exactly 2 consecutive slots."""
+    blocks = _find_lab_blocks(grid, subject_id)
+    return len(blocks) == 2 and all(len(b) == 2 for b in blocks)
+
+
+def _clear_lab(grid: Chromosome, subject_id: int) -> None:
+    for d, row in enumerate(grid):
+        for s in range(len(row)):
+            cell = row[s]
+            if cell and cell[0] == "lab" and cell[1] == subject_id:
+                row[s] = None
+
+
+def _clear_lab_run_at(grid: Chromosome, day: int, slot: int) -> None:
+    """
+    If (day, slot) contains a lab cell, clear the entire consecutive run for that lab on that day.
+    This prevents leaving singleton lab cells when overwriting one slot of a 2-slot block.
+    """
+    row = grid[day]
+    cell = row[slot]
+    if not cell or cell[0] != "lab":
+        return
+    subject_id = cell[1]
+    # expand left/right
+    left = slot
+    while left - 1 >= 0 and row[left - 1] and row[left - 1][0] == "lab" and row[left - 1][1] == subject_id:
+        left -= 1
+    right = slot
+    while right + 1 < len(row) and row[right + 1] and row[right + 1][0] == "lab" and row[right + 1][1] == subject_id:
+        right += 1
+    for s in range(left, right + 1):
+        row[s] = None
+
+
 def _place_if_valid(
     grid: Chromosome,
     day: int,
@@ -168,6 +207,9 @@ def _place_lab_block(
 ) -> bool:
     slots_per_day = len(grid[day])
     if start_slot < 0 or start_slot + 1 >= slots_per_day:
+        return False
+    # Per-day rule: this lab can only occupy 2 slots/day (one 2-slot block per day).
+    if _lab_count_in_day(grid, demand.subject_id, day) > 0:
         return False
     cell: SlotCell = ("lab", demand.subject_id, demand.faculty_ids)
     # prevent merging into >2 consecutive slots for same lab
@@ -200,7 +242,12 @@ def _force_place_if_available(
     *,
     allow_overwrite: bool,
 ) -> bool:
-    if not allow_overwrite and grid[day][slot] is not None:
+    existing = grid[day][slot]
+    if not allow_overwrite and existing is not None:
+        return False
+    # Never overwrite lab cells when placing other items during repair;
+    # otherwise we break the required 2-consecutive lab block structure.
+    if allow_overwrite and existing is not None and existing[0] == "lab":
         return False
     for fid in cell[2]:
         if not _faculty_available_at(fid, day, slot, availability):
@@ -222,6 +269,18 @@ def _force_place_lab_block(
     if start_slot < 0 or start_slot + 1 >= slots_per_day:
         return False
     cell: SlotCell = ("lab", demand.subject_id, demand.faculty_ids)
+    # Per-day rule: only one block/day for this lab. When overwriting, we still must not
+    # create two separate blocks for the same lab on the same day.
+    if not allow_overwrite and _lab_count_in_day(grid, demand.subject_id, day) > 0:
+        return False
+    if allow_overwrite and _lab_count_in_day(grid, demand.subject_id, day) > 0:
+        # Allow overwrite only if existing lab cells (if any) are exactly the target slots.
+        for s in range(slots_per_day):
+            if s in (start_slot, start_slot + 1):
+                continue
+            c = grid[day][s]
+            if c and c[0] == "lab" and c[1] == demand.subject_id:
+                return False
     # prevent merging into >2 consecutive slots for same lab (even when overwriting)
     if start_slot - 1 >= 0:
         left = grid[day][start_slot - 1]
@@ -238,6 +297,11 @@ def _force_place_lab_block(
             return False
     if not allow_overwrite and (grid[day][start_slot] is not None or grid[day][start_slot + 1] is not None):
         return False
+    if allow_overwrite:
+        # If we are overwriting any lab cell (even from another lab), clear its whole run
+        # so we don't leave a single orphaned lab slot behind.
+        _clear_lab_run_at(grid, day, start_slot)
+        _clear_lab_run_at(grid, day, start_slot + 1)
     grid[day][start_slot] = cell
     grid[day][start_slot + 1] = cell
     return True
@@ -277,49 +341,91 @@ def _repair_chromosome(
         repaired.append([None] * slots_per_day)
 
     # Ensure lab cells have 2 staff and are in 2×2 blocks.
-    for lab in lab_demands:
-        # Remove malformed lab cells (wrong staff count)
-        for d, s, cell in list(_iter_cells(repaired)):
-            if cell[0] == "lab" and cell[1] == lab.subject_id and len(cell[2]) != 2:
-                repaired[d][s] = None
-
-        blocks = _find_lab_blocks(repaired, lab.subject_id)
-        # If any block is not length 2, clear it (we will re-place)
-        for block in blocks:
-            if len(block) != 2:
-                for d, s in block:
+    # Run multiple passes because later lab placements (with eviction) can break earlier labs.
+    for _pass in range(3):
+        for lab in lab_demands:
+            # Remove malformed lab cells (wrong staff count)
+            for d, s, cell in list(_iter_cells(repaired)):
+                if cell[0] == "lab" and cell[1] == lab.subject_id and len(cell[2]) != 2:
                     repaired[d][s] = None
 
-        # Count after cleanup and place missing lab blocks
-        placed = _count_weekly(repaired, "lab", lab.subject_id)
-        # lab needs exactly 4 cells => two blocks
-        while placed < 4:
-            # Prefer non-overwrite placement first, then allow eviction.
-            candidates = [(d, s) for d in range(working_days) for s in range(max(1, slots_per_day - 1))]
-            rng.shuffle(candidates)
-            success = False
-            for day, start in candidates:
-                if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=False):
-                    placed += 2
-                    success = True
+            blocks = _find_lab_blocks(repaired, lab.subject_id)
+            # If any block is not length 2, clear it (we will re-place)
+            for block in blocks:
+                if len(block) != 2:
+                    for d, s in block:
+                        repaired[d][s] = None
+
+            # Count after cleanup and place missing lab blocks
+            placed = _count_weekly(repaired, "lab", lab.subject_id)
+            # lab needs exactly 4 cells => two blocks
+            while placed < 4:
+                # Prefer non-overwrite placement first, then allow eviction.
+                candidates = [(d, s) for d in range(working_days) for s in range(max(1, slots_per_day - 1))]
+                rng.shuffle(candidates)
+                success = False
+                used_days = {d for d in range(working_days) if _lab_count_in_day(repaired, lab.subject_id, d) > 0}
+                for day, start in candidates:
+                    if day in used_days:
+                        continue
+                    if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=False):
+                        placed += 2
+                        success = True
+                        break
+                if success:
+                    continue
+                # Evict two slots if needed
+                for day, start in candidates:
+                    if day in used_days:
+                        continue
+                    if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True):
+                        placed = _count_weekly(repaired, "lab", lab.subject_id)
+                        success = True
+                        break
+                if not success:
                     break
-            if success:
-                continue
-            # Evict two slots if needed
-            for day, start in candidates:
-                if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True):
-                    placed = _count_weekly(repaired, "lab", lab.subject_id)
-                    success = True
-                    break
-            if not success:
-                break
-        # If we somehow exceeded (due to crossover), trim extras
-        if placed > 4:
-            # remove random lab cells until 4
-            coords = [(d, s) for d, s, cell in _iter_cells(repaired) if cell[0] == "lab" and cell[1] == lab.subject_id]
-            rng.shuffle(coords)
-            for d, s in coords[4:]:
-                repaired[d][s] = None
+
+            # If we somehow exceeded (due to crossover), trim extras
+            if placed > 4:
+                coords = [(d, s) for d, s, cell in _iter_cells(repaired) if cell[0] == "lab" and cell[1] == lab.subject_id]
+                rng.shuffle(coords)
+                for d, s in coords[4:]:
+                    repaired[d][s] = None
+
+            # Hard enforce: lab must be exactly two 2-slot blocks (no singles split across days).
+            # If not satisfied, wipe this lab and re-place two clean blocks (with eviction if needed).
+            if not _lab_blocks_valid(repaired, lab.subject_id):
+                _clear_lab(repaired, lab.subject_id)
+                # Place two blocks on two different days when possible (to avoid 4 consecutive).
+                days = list(range(working_days))
+                rng.shuffle(days)
+                placed_blocks = 0
+                for day in days:
+                    if placed_blocks >= 2:
+                        break
+                    starts = list(range(max(1, slots_per_day - 1)))
+                    rng.shuffle(starts)
+                    for start in starts:
+                        if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True):
+                            placed_blocks += 1
+                            break
+                # If still not valid (tight constraints), allow retry without day restriction.
+                attempts = 0
+                while attempts < 200 and not _lab_blocks_valid(repaired, lab.subject_id):
+                    _clear_lab(repaired, lab.subject_id)
+                    placed_blocks = 0
+                    candidates = [(d, s) for d in range(working_days) for s in range(max(1, slots_per_day - 1))]
+                    rng.shuffle(candidates)
+                    for day, start in candidates:
+                        if placed_blocks >= 2:
+                            break
+                        if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True):
+                            placed_blocks += 1
+                    attempts += 1
+
+        # If all labs are valid, no need for more passes
+        if all(_lab_blocks_valid(repaired, lab.subject_id) for lab in lab_demands):
+            break
 
     # Theory: enforce max 1/day and weekly=3
     for th in theory_demands:
@@ -540,6 +646,10 @@ def calculate_fitness(
         # each lab should produce exactly 2 blocks and each must be length 2
         if len(blocks) != 2 or any(len(b) != 2 for b in blocks):
             penalty += PENALTY_LAB_NOT_CONSECUTIVE
+        # Per-day: lab occupies only 2 slots/day (so the two blocks must be on different days)
+        for day in range(len(chromosome)):
+            if _lab_count_in_day(chromosome, lab.subject_id, day) > 2:
+                penalty += PENALTY_LAB_NOT_CONSECUTIVE
 
         # exactly 2 staff per lab cell
         for _, _, cell in _iter_cells(chromosome):

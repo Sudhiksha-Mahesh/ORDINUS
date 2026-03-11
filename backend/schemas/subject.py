@@ -86,3 +86,14 @@ class ClassSubjectDetailResponse(ClassSubjectResponse):
 
     subject_name: str = ""
     faculty_name: Optional[str] = None
+
+
+class LabFacultyUpdate(BaseModel):
+    """Set lab subject's additional faculty allocations (for lab sessions)."""
+
+    faculty_ids: list[int] = Field(
+        ...,
+        min_length=2,
+        max_length=2,
+        description="Exactly two faculty IDs for lab sessions.",
+    )
