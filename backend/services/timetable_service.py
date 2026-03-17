@@ -286,6 +286,13 @@ async def generate_timetable_ga(
                 if fid:
                     s.add(fid)
 
+    break_after_slots: list[int] = []
+    if getattr(class_, "break_after_slot_1", None) is not None:
+        break_after_slots.append(class_.break_after_slot_1)
+    if getattr(class_, "break_after_slot_2", None) is not None:
+        break_after_slots.append(class_.break_after_slot_2)
+    break_after_slots = sorted(set(break_after_slots))
+
     best = run_genetic_algorithm(
         working_days=working_days,
         slots_per_day=slots_per_day,
@@ -297,6 +304,7 @@ async def generate_timetable_ga(
         population_size=population_size,
         generations=generations,
         seed=seed,
+        break_after_slots=break_after_slots,
     )
     if not best:
         return None

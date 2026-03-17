@@ -43,6 +43,7 @@ PENALTY_WEEKLY_HOURS_NOT_MET = 150
 PENALTY_LAB_MISSING_TWO_STAFF = 150
 PENALTY_EXTRA_CLASS_HOURS_MISSING = 80
 PENALTY_EMPTY_SLOT = 10
+PENALTY_LAB_SEPARATED_BY_BREAK = 180
 
 # GA defaults
 DEFAULT_SEED = 42
@@ -146,6 +147,11 @@ def _lab_count_in_day(grid: Chromosome, subject_id: int, day: int) -> int:
     return sum(1 for cell in grid[day] if cell and cell[0] == "lab" and cell[1] == subject_id)
 
 
+def _break_separates_lab(break_after_slots: list[int], start_slot: int) -> bool:
+    """True if a break after (1-based) slot (start_slot+1) would sit between the two lab slots."""
+    return (start_slot + 1) in break_after_slots
+
+
 def _lab_blocks_valid(grid: Chromosome, subject_id: int) -> bool:
     """Valid iff there are exactly two blocks and each block is exactly 2 consecutive slots."""
     blocks = _find_lab_blocks(grid, subject_id)
@@ -204,9 +210,13 @@ def _place_lab_block(
     day: int,
     start_slot: int,
     availability: dict[int, set[DaySlot]],
+    break_after_slots: list[int] | None = None,
 ) -> bool:
     slots_per_day = len(grid[day])
     if start_slot < 0 or start_slot + 1 >= slots_per_day:
+        return False
+    # Labs must not be separated by breaks: do not place a lab block where a break falls between its two slots.
+    if break_after_slots and _break_separates_lab(break_after_slots, start_slot):
         return False
     # Per-day rule: this lab can only occupy 2 slots/day (one 2-slot block per day).
     if _lab_count_in_day(grid, demand.subject_id, day) > 0:
@@ -264,9 +274,12 @@ def _force_place_lab_block(
     availability: dict[int, set[DaySlot]],
     *,
     allow_overwrite: bool,
+    break_after_slots: list[int] | None = None,
 ) -> bool:
     slots_per_day = len(grid[day])
     if start_slot < 0 or start_slot + 1 >= slots_per_day:
+        return False
+    if break_after_slots and _break_separates_lab(break_after_slots, start_slot):
         return False
     cell: SlotCell = ("lab", demand.subject_id, demand.faculty_ids)
     # Per-day rule: only one block/day for this lab. When overwriting, we still must not
@@ -324,10 +337,12 @@ def _repair_chromosome(
     extra_demands: list[ExtraDemand],
     availability: dict[int, set[DaySlot]],
     rng: random.Random,
+    break_after_slots: list[int] | None = None,
 ) -> Chromosome:
     """
     Repair tries to enforce weekly counts and lab 2×2 structure.
     It keeps valid placements when possible and re-fills missing ones.
+    Labs are never placed so that a break separates the two slots.
     """
     repaired = _copy_grid(grid)
 
@@ -342,6 +357,10 @@ def _repair_chromosome(
 
     # Ensure lab cells have 2 staff and are in 2×2 blocks.
     # Run multiple passes because later lab placements (with eviction) can break earlier labs.
+    valid_lab_starts_repair = [s for s in range(slots_per_day - 1) if not (break_after_slots and _break_separates_lab(break_after_slots, s))]
+    if not valid_lab_starts_repair:
+        valid_lab_starts_repair = list(range(slots_per_day - 1))
+
     for _pass in range(3):
         for lab in lab_demands:
             # Remove malformed lab cells (wrong staff count)
@@ -358,17 +377,17 @@ def _repair_chromosome(
 
             # Count after cleanup and place missing lab blocks
             placed = _count_weekly(repaired, "lab", lab.subject_id)
-            # lab needs exactly 4 cells => two blocks
+            # lab needs exactly 4 cells => two blocks; only use start slots not separated by a break
             while placed < 4:
                 # Prefer non-overwrite placement first, then allow eviction.
-                candidates = [(d, s) for d in range(working_days) for s in range(max(1, slots_per_day - 1))]
+                candidates = [(d, s) for d in range(working_days) for s in valid_lab_starts_repair]
                 rng.shuffle(candidates)
                 success = False
                 used_days = {d for d in range(working_days) if _lab_count_in_day(repaired, lab.subject_id, d) > 0}
                 for day, start in candidates:
                     if day in used_days:
                         continue
-                    if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=False):
+                    if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=False, break_after_slots=break_after_slots):
                         placed += 2
                         success = True
                         break
@@ -378,7 +397,7 @@ def _repair_chromosome(
                 for day, start in candidates:
                     if day in used_days:
                         continue
-                    if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True):
+                    if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True, break_after_slots=break_after_slots):
                         placed = _count_weekly(repaired, "lab", lab.subject_id)
                         success = True
                         break
@@ -403,10 +422,10 @@ def _repair_chromosome(
                 for day in days:
                     if placed_blocks >= 2:
                         break
-                    starts = list(range(max(1, slots_per_day - 1)))
+                    starts = list(valid_lab_starts_repair)
                     rng.shuffle(starts)
                     for start in starts:
-                        if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True):
+                        if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True, break_after_slots=break_after_slots):
                             placed_blocks += 1
                             break
                 # If still not valid (tight constraints), allow retry without day restriction.
@@ -414,12 +433,12 @@ def _repair_chromosome(
                 while attempts < 200 and not _lab_blocks_valid(repaired, lab.subject_id):
                     _clear_lab(repaired, lab.subject_id)
                     placed_blocks = 0
-                    candidates = [(d, s) for d in range(working_days) for s in range(max(1, slots_per_day - 1))]
+                    candidates = [(d, s) for d in range(working_days) for s in valid_lab_starts_repair]
                     rng.shuffle(candidates)
                     for day, start in candidates:
                         if placed_blocks >= 2:
                             break
-                        if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True):
+                        if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True, break_after_slots=break_after_slots):
                             placed_blocks += 1
                     attempts += 1
 
@@ -531,10 +550,11 @@ def generate_initial_population(
     faculty_availability: dict[int, set[DaySlot]],
     population_size: int = POPULATION_SIZE,
     seed: int | None = DEFAULT_SEED,
+    break_after_slots: list[int] | None = None,
 ) -> list[Chromosome]:
     """
     Generate an initial population that **tries** to satisfy structural rules:
-    - labs placed as 2 consecutive blocks,
+    - labs placed as 2 consecutive blocks (never separated by a break),
     - theory spread across days.
 
     If total required slots exceed capacity, returns [].
@@ -544,12 +564,16 @@ def generate_initial_population(
     if total_required > capacity:
         return []
 
+    valid_lab_starts = [s for s in range(slots_per_day - 1) if not (break_after_slots and _break_separates_lab(break_after_slots, s))]
+    if not valid_lab_starts:
+        valid_lab_starts = list(range(slots_per_day - 1))
+
     rng = _rng(seed)
     population: list[Chromosome] = []
     for _ in range(population_size):
         grid = _make_empty_grid(working_days, slots_per_day)
 
-        # Place labs first (harder)
+        # Place labs first (harder); only at start slots not separated by a break
         labs = lab_demands[:]
         rng.shuffle(labs)
         for lab in labs:
@@ -557,8 +581,8 @@ def generate_initial_population(
             attempts = 0
             while blocks_needed > 0 and attempts < 500:
                 day = rng.randrange(working_days)
-                start = rng.randrange(max(1, slots_per_day - 1))
-                if _place_lab_block(grid, lab, day, start, faculty_availability):
+                start = rng.choice(valid_lab_starts)
+                if _place_lab_block(grid, lab, day, start, faculty_availability, break_after_slots=break_after_slots):
                     blocks_needed -= 1
                 attempts += 1
 
@@ -593,7 +617,7 @@ def generate_initial_population(
                     placed += 1
                 attempts += 1
 
-        population.append(_repair_chromosome(grid, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, rng))
+        population.append(_repair_chromosome(grid, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, rng, break_after_slots=break_after_slots))
     return population
 
 
@@ -604,6 +628,7 @@ def calculate_fitness(
     extra_demands: list[ExtraDemand],
     faculty_availability: dict[int, set[DaySlot]],
     faculty_used_elsewhere: dict[DaySlot, set[int]] | None = None,
+    break_after_slots: list[int] | None = None,
 ) -> float:
     """
     Fitness score starts at 1000 and subtracts penalties.
@@ -656,6 +681,14 @@ def calculate_fitness(
             if cell[0] == "lab" and cell[1] == lab.subject_id:
                 if len(cell[2]) != 2:
                     penalty += PENALTY_LAB_MISSING_TWO_STAFF
+
+        # labs must not be separated by breaks
+        if break_after_slots:
+            for block in _find_lab_blocks(chromosome, lab.subject_id):
+                if len(block) == 2:
+                    start_slot = block[0][1]
+                    if _break_separates_lab(break_after_slots, start_slot):
+                        penalty += PENALTY_LAB_SEPARATED_BY_BREAK
 
     # extras weekly hours
     for ex in extra_demands:
@@ -717,6 +750,7 @@ def mutation(
     faculty_availability: dict[int, set[DaySlot]],
     mutation_rate: float = MUTATION_RATE,
     seed: int | None = None,
+    break_after_slots: list[int] | None = None,
 ) -> Chromosome:
     """
     Mutation: randomly change slot assignments while trying to keep structural rules.
@@ -735,9 +769,12 @@ def mutation(
         d2, s2 = rng.randrange(working_days), rng.randrange(slots_per_day)
         grid[d1][s1], grid[d2][s2] = grid[d2][s2], grid[d1][s1]
     elif op < 0.70 and lab_demands and slots_per_day >= 2:
-        # move one lab block
+        # move one lab block (only to start slots not separated by a break)
         lab = rng.choice(lab_demands)
         blocks = [b for b in _find_lab_blocks(grid, lab.subject_id) if len(b) == 2]
+        valid_lab_starts = [s for s in range(slots_per_day - 1) if not (break_after_slots and _break_separates_lab(break_after_slots, s))]
+        if not valid_lab_starts:
+            valid_lab_starts = list(range(slots_per_day - 1))
         if blocks:
             block = rng.choice(blocks)
             # clear old
@@ -747,8 +784,8 @@ def mutation(
             attempts = 0
             while attempts < 80:
                 day = rng.randrange(working_days)
-                start = rng.randrange(max(1, slots_per_day - 1))
-                if _place_lab_block(grid, lab, day, start, faculty_availability):
+                start = rng.choice(valid_lab_starts)
+                if _place_lab_block(grid, lab, day, start, faculty_availability, break_after_slots=break_after_slots):
                     break
                 attempts += 1
     else:
@@ -764,13 +801,13 @@ def mutation(
                 if cell[0] == "theory":
                     subj_id = cell[1]
                     if _theory_counts_by_day(grid, subj_id)[d2] >= 1:
-                        return _repair_chromosome(grid, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, rng)
+                        return _repair_chromosome(grid, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, rng, break_after_slots=break_after_slots)
                 if all(_faculty_available_at(fid, d2, s2, faculty_availability) for fid in cell[2]):
                     grid[d1][s1] = None
                     grid[d2][s2] = cell
 
     # Repair after mutation to keep rule compliance high
-    return _repair_chromosome(grid, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, rng)
+    return _repair_chromosome(grid, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, rng, break_after_slots=break_after_slots)
 
 
 def run_genetic_algorithm(
@@ -786,9 +823,11 @@ def run_genetic_algorithm(
     tournament_size: int = TOURNAMENT_SIZE,
     mutation_rate: float = MUTATION_RATE,
     seed: int | None = DEFAULT_SEED,
+    break_after_slots: list[int] | None = None,
 ) -> Chromosome | None:
     """
     Run GA and return the best chromosome for this class.
+    Labs are never placed so that a break separates the two slots of a lab block.
     """
     rng = _rng(seed)
     pop = generate_initial_population(
@@ -800,6 +839,7 @@ def run_genetic_algorithm(
         faculty_availability=faculty_availability,
         population_size=population_size,
         seed=seed,
+        break_after_slots=break_after_slots,
     )
     if not pop:
         return None
@@ -813,7 +853,7 @@ def run_genetic_algorithm(
         gen_rng = _rng(gen_seed)
 
         fitnesses = [
-            calculate_fitness(c, theory_demands, lab_demands, extra_demands, faculty_availability, faculty_used_elsewhere)
+            calculate_fitness(c, theory_demands, lab_demands, extra_demands, faculty_availability, faculty_used_elsewhere, break_after_slots=break_after_slots)
             for c in pop
         ]
         for i, f in enumerate(fitnesses):
@@ -825,7 +865,7 @@ def run_genetic_algorithm(
         next_pop: list[Chromosome] = []
         for i in range(0, len(selected) - 1, 2):
             child = crossover(selected[i], selected[i + 1], seed=gen_rng.randint(0, 2**31 - 1))
-            child = _repair_chromosome(child, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, gen_rng)
+            child = _repair_chromosome(child, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, gen_rng, break_after_slots=break_after_slots)
             next_pop.append(child)
         if len(selected) % 2 == 1:
             next_pop.append(selected[-1])
@@ -841,6 +881,7 @@ def run_genetic_algorithm(
                 faculty_availability=faculty_availability,
                 mutation_rate=mutation_rate,
                 seed=gen_rng.randint(0, 2**31 - 1),
+                break_after_slots=break_after_slots,
             )
 
         # elitism: keep best
