@@ -45,6 +45,8 @@ export interface Class {
   name: string
   working_days: number
   slots_per_day: number
+  break_after_slot_1?: number | null
+  break_after_slot_2?: number | null
 }
 
 export type SubjectType = 'theory' | 'lab'
@@ -76,6 +78,7 @@ export interface TimetableGrid {
   class_name: string
   working_days: number
   slots_per_day: number
+  break_after_slots?: number[]
   grid: (TimetableCell | null)[][]
 }
 
@@ -110,9 +113,9 @@ export const facultyApi = {
 export const classApi = {
   list: () => request<Class[]>('/classes'),
   get: (id: number) => request<Class>(`/classes/${id}`),
-  create: (body: { name: string; working_days: number; slots_per_day: number }) =>
+  create: (body: { name: string; working_days: number; slots_per_day: number; break_after_slot_1?: number | null; break_after_slot_2?: number | null }) =>
     request<Class>('/classes', { method: 'POST', body: JSON.stringify(body) }),
-  update: (id: number, body: { name?: string; working_days?: number; slots_per_day?: number }) =>
+  update: (id: number, body: { name?: string; working_days?: number; slots_per_day?: number; break_after_slot_1?: number | null; break_after_slot_2?: number | null }) =>
     request<Class>(`/classes/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   delete: (id: number) =>
     request<void>(`/classes/${id}`, { method: 'DELETE' }),

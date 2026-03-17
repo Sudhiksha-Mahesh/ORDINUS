@@ -16,6 +16,9 @@ class Class(Base):
     name = Column(String(100), nullable=False, unique=True, index=True)
     working_days = Column(Integer, nullable=False)  # e.g. 5 for Mon-Fri
     slots_per_day = Column(Integer, nullable=False)  # e.g. 8
+    # Breaks: 1-based slot number after which a break is shown (e.g. 2 = after 2nd slot)
+    break_after_slot_1 = Column(Integer, nullable=True)
+    break_after_slot_2 = Column(Integer, nullable=True)
 
     # Relationships
     class_subjects = relationship("ClassSubject", back_populates="class_", cascade="all, delete-orphan")

@@ -43,6 +43,8 @@ class TimetableGridResponse(BaseModel):
     class_name: str
     working_days: int
     slots_per_day: int
+    # 1-based slot numbers after which to show a break (e.g. [2, 4] = break after 2nd and 4th slot)
+    break_after_slots: list[int] = Field(default_factory=list, description="Break after these slots (1-based)")
     # grid[row][col] = TimetableCellDisplay; row=day, col=slot
     grid: list[list[TimetableCellDisplay | None]]
 

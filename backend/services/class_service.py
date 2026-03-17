@@ -26,6 +26,8 @@ async def create_class(db: AsyncSession, data: ClassCreate) -> Class:
         name=data.name,
         working_days=data.working_days,
         slots_per_day=data.slots_per_day,
+        break_after_slot_1=data.break_after_slot_1,
+        break_after_slot_2=data.break_after_slot_2,
     )
     db.add(class_)
     await db.flush()
@@ -38,12 +40,9 @@ async def update_class(db: AsyncSession, class_id: int, data: ClassUpdate) -> Cl
     class_ = await get_class_by_id(db, class_id)
     if not class_:
         return None
-    if data.name is not None:
-        class_.name = data.name
-    if data.working_days is not None:
-        class_.working_days = data.working_days
-    if data.slots_per_day is not None:
-        class_.slots_per_day = data.slots_per_day
+    update_dict = data.model_dump(exclude_unset=True)
+    for key, value in update_dict.items():
+        setattr(class_, key, value)
     await db.flush()
     await db.refresh(class_)
     return class_

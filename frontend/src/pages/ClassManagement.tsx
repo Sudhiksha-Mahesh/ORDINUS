@@ -3,13 +3,19 @@ import { Save, Trash2 } from 'lucide-react'
 import { classApi, type Class } from '../services/api'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
-import { Field, NumberInput, TextInput } from '../components/ui/Form'
+import { Field, NumberInput, Select, TextInput } from '../components/ui/Form'
 import { Table, TBody, TD, TH, THead, TR } from '../components/ui/Table'
 
 export default function ClassManagement() {
   const [list, setList] = useState<Class[]>([])
   const [loading, setLoading] = useState(true)
-  const [form, setForm] = useState({ name: '', working_days: 5, slots_per_day: 8 })
+  const [form, setForm] = useState<{
+    name: string
+    working_days: number
+    slots_per_day: number
+    break_after_slot_1: number | null
+    break_after_slot_2: number | null
+  }>({ name: '', working_days: 5, slots_per_day: 8, break_after_slot_1: null, break_after_slot_2: null })
   const [editing, setEditing] = useState<Class | null>(null)
   const [submitAttempted, setSubmitAttempted] = useState(false)
 
@@ -24,7 +30,7 @@ export default function ClassManagement() {
     setSubmitAttempted(true)
     if (!form.name.trim()) return
     classApi.create(form)
-      .then(() => { setForm({ name: '', working_days: 5, slots_per_day: 8 }); load() })
+      .then(() => { setForm({ name: '', working_days: 5, slots_per_day: 8, break_after_slot_1: null, break_after_slot_2: null }); load() })
       .catch((err) => alert(err.message))
   }
 
@@ -33,13 +39,19 @@ export default function ClassManagement() {
     setSubmitAttempted(true)
     if (!editing) return
     classApi.update(editing.id, form)
-      .then(() => { setEditing(null); setForm({ name: '', working_days: 5, slots_per_day: 8 }); load() })
+      .then(() => { setEditing(null); setForm({ name: '', working_days: 5, slots_per_day: 8, break_after_slot_1: null, break_after_slot_2: null }); load() })
       .catch((err) => alert(err.message))
   }
 
   const openEdit = (c: Class) => {
     setEditing(c)
-    setForm({ name: c.name, working_days: c.working_days, slots_per_day: c.slots_per_day })
+    setForm({
+      name: c.name,
+      working_days: c.working_days,
+      slots_per_day: c.slots_per_day,
+      break_after_slot_1: c.break_after_slot_1 ?? null,
+      break_after_slot_2: c.break_after_slot_2 ?? null,
+    })
   }
 
   return (
@@ -59,7 +71,7 @@ export default function ClassManagement() {
                 variant="ghost"
                 onClick={() => {
                   setEditing(null)
-                  setForm({ name: '', working_days: 5, slots_per_day: 8 })
+                  setForm({ name: '', working_days: 5, slots_per_day: 8, break_after_slot_1: null, break_after_slot_2: null })
                   setSubmitAttempted(false)
                 }}
               >
@@ -100,7 +112,29 @@ export default function ClassManagement() {
                 onChange={(e) => setForm((f) => ({ ...f, slots_per_day: Number(e.target.value) }))}
               />
             </Field>
-            <div className="md:col-span-1 flex items-end">
+            <Field label="Break 1 after slot" hint="Optional" className="md:col-span-1">
+              <Select
+                value={form.break_after_slot_1 ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, break_after_slot_1: e.target.value === '' ? null : Number(e.target.value) }))}
+              >
+                <option value="">None</option>
+                {Array.from({ length: form.slots_per_day }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>After slot {n}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Break 2 after slot" hint="Optional" className="md:col-span-1">
+              <Select
+                value={form.break_after_slot_2 ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, break_after_slot_2: e.target.value === '' ? null : Number(e.target.value) }))}
+              >
+                <option value="">None</option>
+                {Array.from({ length: form.slots_per_day }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>After slot {n}</option>
+                ))}
+              </Select>
+            </Field>
+            <div className="md:col-span-4 flex items-end">
               <Button type="submit" className="w-full md:w-auto">
                 <Save className="h-4 w-4" />
                 {editing ? 'Update' : 'Add'}

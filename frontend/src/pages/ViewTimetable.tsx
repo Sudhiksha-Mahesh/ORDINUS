@@ -62,6 +62,14 @@ export default function ViewTimetable() {
   }
   if (!data) return null
 
+  const breakAfterSlots = data.break_after_slots ?? []
+  type Col = { type: 'slot'; index: number } | { type: 'break' }
+  const columns: Col[] = []
+  for (let s = 0; s < data.slots_per_day; s++) {
+    columns.push({ type: 'slot', index: s })
+    if (breakAfterSlots.includes(s + 1)) columns.push({ type: 'break' })
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -113,14 +121,23 @@ export default function ViewTimetable() {
                   <th className="sticky left-0 z-20 bg-white border-b border-slate-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600 w-40">
                     Day
                   </th>
-                  {Array.from({ length: data.slots_per_day }, (_, i) => (
-                    <th
-                      key={i}
-                      className="bg-white border-b border-slate-200 px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-slate-600"
-                    >
-                      Slot {i + 1}
-                    </th>
-                  ))}
+                  {columns.map((col, i) =>
+                    col.type === 'slot' ? (
+                      <th
+                        key={`s-${col.index}`}
+                        className="bg-white border-b border-slate-200 px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-slate-600"
+                      >
+                        Slot {col.index + 1}
+                      </th>
+                    ) : (
+                      <th
+                        key={`b-${i}`}
+                        className="bg-slate-100 border-b border-slate-200 px-2 py-3 text-center text-xs font-semibold uppercase tracking-wide text-slate-600 w-20"
+                      >
+                        Break
+                      </th>
+                    )
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -129,13 +146,24 @@ export default function ViewTimetable() {
                     <td className="sticky left-0 z-10 bg-white border-b border-slate-200 px-4 py-3 font-semibold text-slate-900">
                       {DAY_NAMES[dayIndex] ?? `Day ${dayIndex + 1}`}
                     </td>
-                    {row.map((cell, slotIndex) => {
+                    {columns.map((col, colKey) => {
+                      if (col.type === 'break') {
+                        return (
+                          <td
+                            key={`b-${colKey}`}
+                            className="border-b border-slate-200 px-2 py-3 align-middle bg-slate-100/80"
+                          >
+                            <div className="text-center text-xs font-medium text-slate-600">Break</div>
+                          </td>
+                        )
+                      }
+                      const cell = row[col.index]
                       const repeatedSet = repeatedFacultyByDay.get(dayIndex) || new Set<string>()
                       const isRepeatedFaculty = Boolean(cell?.faculty_name && repeatedSet.has(cell.faculty_name))
                       const isEmpty = !cell
                       return (
                         <td
-                          key={slotIndex}
+                          key={`s-${col.index}`}
                           className={cn(
                             'border-b border-slate-200 px-3 py-3 align-top transition',
                             'group-hover:bg-slate-50/50',

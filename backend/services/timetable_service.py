@@ -158,11 +158,19 @@ async def get_timetable_grid(db: AsyncSession, class_id: int) -> TimetableGridRe
                 subject_name=subject_name,
                 faculty_name=faculty_name,
             )
+    break_after_slots: list[int] = []
+    if getattr(class_, "break_after_slot_1", None) is not None:
+        break_after_slots.append(class_.break_after_slot_1)
+    if getattr(class_, "break_after_slot_2", None) is not None:
+        break_after_slots.append(class_.break_after_slot_2)
+    break_after_slots = sorted(set(break_after_slots))
+
     return TimetableGridResponse(
         class_id=class_.id,
         class_name=class_.name,
         working_days=class_.working_days,
         slots_per_day=class_.slots_per_day,
+        break_after_slots=break_after_slots,
         grid=grid,
     )
 
