@@ -90,6 +90,7 @@ export interface ExtraClass {
 export interface TimetableCell {
   subject_name: string
   faculty_name: string
+  slot_type: 'theory' | 'lab' | 'extra'
 }
 
 export interface TimetableGrid {

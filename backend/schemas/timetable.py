@@ -1,6 +1,8 @@
 """
 Pydantic schemas for Timetable (generated schedule).
 """
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -30,10 +32,11 @@ class TimetableSlotResponse(TimetableSlotBase):
 
 
 class TimetableCellDisplay(BaseModel):
-    """One cell for display: subject name + faculty name."""
+    """One cell for display: subject name + faculty name + slot type."""
 
     subject_name: str
     faculty_name: str
+    slot_type: Literal["theory", "lab", "extra"]
 
 
 class TimetableGridResponse(BaseModel):

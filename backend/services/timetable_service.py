@@ -294,10 +294,15 @@ async def get_timetable_grid(db: AsyncSession, class_id: int) -> TimetableGridRe
         if e.day < class_.working_days and e.slot < class_.slots_per_day:
             if e.subject_id and e.subject:
                 subject_name = e.subject.name
+                subj_type = str(getattr(e.subject, "type", "theory") or "theory").strip().lower()
+                # Be tolerant to legacy data variants (e.g., "Lab"), and infer lab when two faculty are attached.
+                slot_type = "lab" if (subj_type == "lab" or (e.faculty_ids and len(e.faculty_ids) >= 2)) else "theory"
             elif e.extra_class_id and e.extra_class:
                 subject_name = e.extra_class.name
+                slot_type = "extra"
             else:
                 subject_name = "?"
+                slot_type = "theory"
             if e.faculty_ids and len(e.faculty_ids) > 0:
                 faculty_name = ", ".join(faculty_names.get(fid, "?") for fid in e.faculty_ids)
             elif e.faculty_id and e.faculty:
@@ -307,6 +312,7 @@ async def get_timetable_grid(db: AsyncSession, class_id: int) -> TimetableGridRe
             grid[e.day][e.slot] = TimetableCellDisplay(
                 subject_name=subject_name,
                 faculty_name=faculty_name,
+                slot_type=slot_type,
             )
     break_after_slots: list[int] = []
     if getattr(class_, "break_after_slot_1", None) is not None:

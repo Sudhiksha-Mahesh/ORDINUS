@@ -161,6 +161,16 @@ export default function ViewTimetable() {
                       const repeatedSet = repeatedFacultyByDay.get(dayIndex) || new Set<string>()
                       const isRepeatedFaculty = Boolean(cell?.faculty_name && repeatedSet.has(cell.faculty_name))
                       const isEmpty = !cell
+                      const normalizedType =
+                        cell?.slot_type === 'lab' || cell?.slot_type === 'extra' || cell?.slot_type === 'theory'
+                          ? cell.slot_type
+                          : cell?.faculty_name?.includes(',')
+                            ? 'lab'
+                            : 'theory'
+                      const slotColorClass =
+                        normalizedType === 'lab'
+                          ? 'bg-emerald-50/90 ring-emerald-200'
+                          : 'bg-orange-50/90 ring-orange-200'
                       return (
                         <td
                           key={`s-${col.index}`}
@@ -177,7 +187,7 @@ export default function ViewTimetable() {
                                 ? 'bg-slate-100/40 ring-slate-200 border border-dashed border-slate-200'
                                 : isRepeatedFaculty
                                   ? 'bg-amber-50 ring-amber-200'
-                                  : 'bg-white ring-slate-200 hover:ring-indigo-200 hover:bg-indigo-50/30',
+                                  : `${slotColorClass} hover:ring-indigo-200`,
                             )}
                             title={
                               cell
