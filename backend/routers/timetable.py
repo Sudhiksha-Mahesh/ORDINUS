@@ -42,7 +42,7 @@ async def generate_timetable_ga(
     """
     Generate timetable using Genetic Algorithm.
     Returns { "Monday": [ {"name": "Math", "faculty": ["Staff1"]}, ... ], ... }.
-    Theory: 3 hrs/week max 1/day, 1 faculty. Lab: 4 hrs as 2+2 consecutive, 2 faculty.
+    Theory: 3 hrs/week max 1/day, 1 faculty. Lab: 4 hrs as 2+2 consecutive, 2 faculty; at least one 2h lab block each day (needs enough lab subjects vs working days).
     Extra classes: hours/week, max 2 extra slots/day (adjacent), after teaching, preferred-after,
     consecutive chunks without breaks; timetable rows have no internal gaps (GA objective).
     Persists to DB.

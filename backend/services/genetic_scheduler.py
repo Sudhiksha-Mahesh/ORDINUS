@@ -9,6 +9,7 @@ Gene: one slot assignment (day, slot) -> theory subject | lab | extra class.
 Hard rules we try to satisfy during construction/mutation (and penalize when violated):
 - Theory: 3 hours/week, max 1 hour/day, exactly 1 faculty.
 - Lab: 4 hours/week, scheduled as 2 blocks × 2 consecutive slots, exactly 2 faculty in each lab cell.
+- When labs exist: every working day must contain at least one 2-slot lab block (any lab subject).
 - Extra classes: hours_per_week; slots not before period 4; optional preferred-after slot;
   consecutive=True => contiguous chunks of up to 2 slots/day (weekly hours may span days);
   at most 2 extra slots per day (all types), adjacent on that day, only after last theory/lab;
@@ -53,6 +54,7 @@ PENALTY_EXTRA_TOO_MANY_PER_DAY = 160
 PENALTY_DAY_ROW_INTERNAL_GAP = 480
 PENALTY_EMPTY_SLOT = 10
 PENALTY_LAB_SEPARATED_BY_BREAK = 180
+PENALTY_DAY_NO_LAB_SESSION = 350
 
 # At most this many extra-class slots (all types combined) on one day.
 MAX_EXTRA_SLOTS_PER_DAY = 2
@@ -501,6 +503,32 @@ def _find_lab_blocks(grid: Chromosome, subject_id: int) -> list[list[DaySlot]]:
 
 def _lab_count_in_day(grid: Chromosome, subject_id: int, day: int) -> int:
     return sum(1 for cell in grid[day] if cell and cell[0] == "lab" and cell[1] == subject_id)
+
+
+def _day_has_at_least_one_lab_two_slot_block(
+    grid: Chromosome, day: int, lab_demands: list[LabDemand]
+) -> bool:
+    """
+    True if this day contains at least one 2-period consecutive lab block (one lab session).
+    Vacuously True when there are no lab subjects.
+    """
+    if not lab_demands:
+        return True
+    row = grid[day]
+    for lab in lab_demands:
+        sid = lab.subject_id
+        for s in range(len(row) - 1):
+            c0, c1 = row[s], row[s + 1]
+            if (
+                c0
+                and c1
+                and c0[0] == "lab"
+                and c1[0] == "lab"
+                and c0[1] == sid
+                and c1[1] == sid
+            ):
+                return True
+    return False
 
 
 def _break_separates_lab(break_after_slots: list[int], start_slot: int) -> bool:
@@ -1174,6 +1202,12 @@ def calculate_fitness(
                     start_slot = block[0][1]
                     if _break_separates_lab(break_after_slots, start_slot):
                         penalty += PENALTY_LAB_SEPARATED_BY_BREAK
+
+    # At least one 2-hour lab session on every working day (when class has labs)
+    if lab_demands:
+        for day in range(len(chromosome)):
+            if not _day_has_at_least_one_lab_two_slot_block(chromosome, day, lab_demands):
+                penalty += PENALTY_DAY_NO_LAB_SESSION
 
     # extras weekly hours + slot / consecutive / break rules
     for ex in extra_demands:

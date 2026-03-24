@@ -479,6 +479,16 @@ async def generate_timetable_ga(
             f"Remove a subject from the class, reduce extra-class hours per week, or increase working days / slots per day in Class Management."
         )
 
+    # Each day must have at least one 2-hour lab block; each lab subject yields 2 such blocks/week on 2 days.
+    if lab_demands and working_days > 2 * len(lab_demands):
+        max_lab_days = 2 * len(lab_demands)
+        raise ValueError(
+            f"This class runs {working_days} days per week but only has {len(lab_demands)} lab subject(s). "
+            f"Each lab is scheduled as two separate 2-hour sessions on two different days, "
+            f"so at most {max_lab_days} days can include a lab. To require at least one 2-hour lab every day, "
+            f"add more lab subjects to the class or reduce working days (e.g. at most {max_lab_days} days with the current labs)."
+        )
+
     best = run_genetic_algorithm(
         working_days=working_days,
         slots_per_day=slots_per_day,
