@@ -43,22 +43,22 @@ async def generate_timetable_ga(
     Generate timetable using Genetic Algorithm.
     Returns { "Monday": [ {"name": "Math", "faculty": ["Staff1"]}, ... ], ... }.
     Theory: 3 hrs/week max 1/day, 1 faculty. Lab: 4 hrs as 2+2 consecutive, 2 faculty.
-    Extra classes: hours/week, not before slot 4, preferred-after, consecutive block without breaks.
+    Extra classes: hours/week, max 2 extra slots/day (adjacent), after teaching, preferred-after,
+    consecutive chunks without breaks; timetable rows have no internal gaps (GA objective).
     Persists to DB.
     """
-    result = await svc.generate_timetable_ga(
-        db,
-        body.class_id,
-        population_size=body.population_size,
-        generations=body.generations,
-        seed=body.seed,
-    )
-    if result is None:
-        raise HTTPException(
-            status_code=400,
-            detail="GA generation failed: check class, subjects (theory/lab with faculty/allocations), extra classes, and faculty availability.",
+    try:
+        return await svc.generate_timetable_ga(
+            db,
+            body.class_id,
+            population_size=body.population_size,
+            generations=body.generations,
+            seed=body.seed,
         )
-    return result
+    except ValueError as e:
+        msg = str(e)
+        status = 404 if msg.startswith("Class not found") else 400
+        raise HTTPException(status_code=status, detail=msg) from e
 
 
 @router.get("/{class_id}", response_model=TimetableGridResponse)

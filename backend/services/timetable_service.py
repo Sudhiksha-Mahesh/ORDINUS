@@ -17,6 +17,8 @@ from services.genetic_scheduler import (
     TheoryDemand,
     LabDemand,
     ExtraDemand,
+    MAX_EXTRA_SLOTS_PER_DAY,
+    compact_chromosome_trailing_empties,
     run_genetic_algorithm,
     chromosome_to_display_format,
     chromosome_to_slot_assignments,
@@ -41,6 +43,15 @@ def _extra_block_has_break_bt(break_after_1based: list[int], start_0: int, lengt
     return False
 
 
+def _merged_extra_slots_ok_bt(existing: list[int], new_slots: list[int]) -> bool:
+    merged = sorted(set(existing + new_slots))
+    if len(merged) > MAX_EXTRA_SLOTS_PER_DAY:
+        return False
+    if len(merged) <= 1:
+        return True
+    return merged == list(range(merged[0], merged[0] + len(merged)))
+
+
 def _place_extra_classes_after_subjects(
     assignments: list[SlotAssignment],
     extra_classes: list[ExtraClass],
@@ -50,57 +61,73 @@ def _place_extra_classes_after_subjects(
     availability_sets: dict[int, set[tuple[int, int]]],
 ) -> list[tuple[int, int, int, int | None]] | None:
     """
-    Greedy placement of extra-class slots on empty cells.
-    Returns [(day, slot, extra_class_id, faculty_id_or_none), ...] or None if impossible.
+    Greedy placement: ≤2 extra slots/day (all extras), adjacent on a day,
+    only after last subject/lab slot, no gap inside an extra block across breaks.
     """
     occ: set[tuple[int, int]] = {(a.day, a.slot) for a in assignments}
+    extra_slots_by_day: dict[int, list[int]] = {d: [] for d in range(working_days)}
     out: list[tuple[int, int, int, int | None]] = []
+
+    def last_subject_slot(day: int) -> int:
+        slots = [a.slot for a in assignments if a.day == day]
+        return max(slots) if slots else -1
 
     for ec in sorted(extra_classes, key=lambda e: (-e.hours_per_week, e.id)):
         mn = _extra_min_slot_0_bt(ec.preferred_after_slot)
-        L = ec.hours_per_week
         fid = ec.faculty_id
         fac_set = availability_sets.get(fid) if fid else None
+        rem = ec.hours_per_week
 
-        def slot_free_and_faculty(day: int, slot: int) -> bool:
-            if (day, slot) in occ:
-                return False
-            if fid and fac_set is not None and (day, slot) not in fac_set:
-                return False
-            return True
-
-        if ec.consecutive and L > 1:
-            if mn + L > slots_per_day:
-                return None
+        while rem > 0:
+            chunk = min(rem, MAX_EXTRA_SLOTS_PER_DAY) if ec.consecutive else 1
             placed = False
+
             for day in range(working_days):
-                for start in range(mn, slots_per_day - L + 1):
-                    if _extra_block_has_break_bt(break_after_1based, start, L):
-                        continue
-                    if all(slot_free_and_faculty(day, start + i) for i in range(L)):
-                        for i in range(L):
-                            occ.add((day, start + i))
-                            out.append((day, start + i, ec.id, fid))
+                last_t = last_subject_slot(day)
+                base = max(mn, last_t + 1)
+                cur_ex = extra_slots_by_day[day]
+
+                if base + chunk > slots_per_day:
+                    continue
+
+                if chunk == 1:
+                    for slot in range(base, slots_per_day):
+                        if (day, slot) in occ:
+                            continue
+                        if fid and fac_set is not None and (day, slot) not in fac_set:
+                            continue
+                        if not _merged_extra_slots_ok_bt(cur_ex, [slot]):
+                            continue
+                        occ.add((day, slot))
+                        cur_ex.append(slot)
+                        cur_ex.sort()
+                        out.append((day, slot, ec.id, fid))
                         placed = True
+                        rem -= 1
+                        break
+                else:
+                    for start in range(base, slots_per_day - chunk + 1):
+                        if _extra_block_has_break_bt(break_after_1based, start, chunk):
+                            continue
+                        new_slots = list(range(start, start + chunk))
+                        if any((day, s) in occ for s in new_slots):
+                            continue
+                        if fid and fac_set is not None and any((day, s) not in fac_set for s in new_slots):
+                            continue
+                        if not _merged_extra_slots_ok_bt(cur_ex, new_slots):
+                            continue
+                        for s in new_slots:
+                            occ.add((day, s))
+                            out.append((day, s, ec.id, fid))
+                        extra_slots_by_day[day] = sorted(set(cur_ex + new_slots))
+                        placed = True
+                        rem -= chunk
                         break
                 if placed:
                     break
+
             if not placed:
                 return None
-        else:
-            for _ in range(L):
-                one = False
-                for day in range(working_days):
-                    for slot in range(mn, slots_per_day):
-                        if slot_free_and_faculty(day, slot):
-                            occ.add((day, slot))
-                            out.append((day, slot, ec.id, fid))
-                            one = True
-                            break
-                    if one:
-                        break
-                if not one:
-                    return None
 
     return out
 
@@ -304,15 +331,18 @@ async def generate_timetable_ga(
     population_size: int = 80,
     generations: int = 300,
     seed: int | None = 42,
-) -> dict | None:
+) -> dict:
     """
     Generate timetable using Genetic Algorithm.
     Returns { "Monday": [ {"name": "Math", "faculty": ["Staff1"]}, ... ], ... }.
     Persists to Timetable table.
+
+    Raises ValueError with a user-visible message if generation cannot start or GA returns no solution.
     """
     class_ = await get_class_by_id(db, class_id)
     if not class_:
-        return None
+        raise ValueError("Class not found.")
+
     working_days = class_.working_days
     slots_per_day = class_.slots_per_day
 
@@ -339,7 +369,9 @@ async def generate_timetable_ga(
             faculty_id_to_name[subj.faculty_id] = subj.faculty.name
         if subj_type == "theory":
             if not subj.faculty_id:
-                return None
+                raise ValueError(
+                    f'Theory subject "{subj.name}" has no faculty assigned. Open Subject Management, edit the subject, and choose a faculty member.'
+                )
             theory_demands.append(TheoryDemand(subject_id=subj.id, faculty_id=subj.faculty_id, name=subj.name))
         else:
             # Lab: need exactly 2 faculty from allocations or subject.faculty_id + one allocation
@@ -350,7 +382,9 @@ async def generate_timetable_ga(
             if subj.faculty_id and subj.faculty_id not in fids:
                 fids = [subj.faculty_id] + list(fids)
             if len(fids) < 2:
-                return None
+                raise ValueError(
+                    f'Lab subject "{subj.name}" needs two different staff members. In Subject Management, set type to Lab and pick two faculty (lab pair).'
+                )
             lab_demands.append(LabDemand(subject_id=subj.id, faculty_ids=(fids[0], fids[1]), name=subj.name))
 
     # Load extra classes for this class
@@ -358,6 +392,11 @@ async def generate_timetable_ga(
         select(ExtraClass).where(ExtraClass.class_id == class_id)
     )
     extra_classes = list(extra_result.scalars().all())
+
+    if not class_subjects and not extra_classes:
+        raise ValueError(
+            "This class has no subjects assigned and no extra classes. Add subjects or extra classes on the Subjects page, then try again."
+        )
     extra_demands: list[ExtraDemand] = []
     extra_id_to_name: dict[int, str] = {}
     for ec in extra_classes:
@@ -427,6 +466,19 @@ async def generate_timetable_ga(
         break_after_slots.append(class_.break_after_slot_2)
     break_after_slots = sorted(set(break_after_slots))
 
+    theory_slots = len(theory_demands) * 3
+    lab_slots = len(lab_demands) * 4
+    extra_slots = sum(e.hours_per_week for e in extra_demands)
+    total_required = theory_slots + lab_slots + extra_slots
+    grid_capacity = working_days * slots_per_day
+    if total_required > grid_capacity:
+        raise ValueError(
+            f"Not enough periods in the week for this timetable. You need {total_required} slots "
+            f"(theory: {theory_slots}, lab: {lab_slots}, extra classes: {extra_slots}) "
+            f"but the class only has {grid_capacity} ({working_days} days × {slots_per_day} slots/day). "
+            f"Remove a subject from the class, reduce extra-class hours per week, or increase working days / slots per day in Class Management."
+        )
+
     best = run_genetic_algorithm(
         working_days=working_days,
         slots_per_day=slots_per_day,
@@ -441,7 +493,19 @@ async def generate_timetable_ga(
         break_after_slots=break_after_slots,
     )
     if not best:
-        return None
+        raise ValueError(
+            "The genetic algorithm could not build an initial population. This usually means the same "
+            "capacity problem as above, or an internal constraint mismatch. Check total hours vs grid size."
+        )
+
+    compact_chromosome_trailing_empties(
+        best,
+        working_days,
+        slots_per_day,
+        extra_demands,
+        availability_sets,
+        break_after_slots,
+    )
 
     # Persist
     await db.execute(delete(Timetable).where(Timetable.class_id == class_id))
