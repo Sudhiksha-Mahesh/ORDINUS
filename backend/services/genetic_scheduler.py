@@ -55,6 +55,8 @@ PENALTY_DAY_ROW_INTERNAL_GAP = 480
 PENALTY_EMPTY_SLOT = 10
 PENALTY_LAB_SEPARATED_BY_BREAK = 180
 PENALTY_DAY_NO_LAB_SESSION = 350
+# Discourage every lab session starting at period 1 (pushes GA / placement toward varied bands).
+PENALTY_LAB_BLOCK_AT_FIRST_SLOT = 22
 
 # At most this many extra-class slots (all types combined) on one day.
 MAX_EXTRA_SLOTS_PER_DAY = 2
@@ -199,7 +201,7 @@ def _compact_one_day_trailing_empties(
 ) -> bool:
     """
     If there is an empty slot with a non-empty slot later the same day, try to shift
-    the leftmost such cell left (theory/extra single slot, or 2-slot lab block).
+    the leftmost such cell left (theory single slot, full contiguous extra run, or 2-slot lab block).
     Yields timetables where free periods collect at the end (e.g. last slots empty).
     """
     row = grid[day]
@@ -225,22 +227,38 @@ def _compact_one_day_trailing_empties(
             ex = next((e for e in extra_demands if e.extra_class_id == cell[1]), None)
             if not ex:
                 continue
+            run = _extra_contiguous_run_on_day(grid, day, t)
+            if not run:
+                continue
+            L, R = run
+            run_len = R - L + 1
             mn = _extra_min_slot_0(ex.preferred_after_slot)
-            row[t] = None
+            saved = [row[u] for u in range(L, R + 1)]
+            for u in range(L, R + 1):
+                row[u] = None
             if _can_place_extra_chunk_at(
                 grid,
                 ex,
                 day,
                 s,
-                1,
+                run_len,
                 mn,
                 break_after_slots,
                 availability,
                 require_empty=True,
-            ) and _place_if_valid(grid, day, s, cell, availability):
+            ) and _place_extra_block(
+                grid,
+                ex,
+                day,
+                s,
+                availability,
+                break_after_slots,
+                block_len=run_len,
+            ):
                 changed = True
             else:
-                row[t] = cell
+                for u, orig in zip(range(L, R + 1), saved):
+                    row[u] = orig
         elif cell[0] == "lab" and t + 1 < slots_per_day and row[t + 1] == cell:
             if s + 1 >= slots_per_day or row[s + 1] is not None:
                 continue
@@ -401,6 +419,57 @@ def _clear_extra(grid: Chromosome, extra_class_id: int) -> None:
             cell = row[s]
             if cell and cell[0] == "extra" and cell[1] == extra_class_id:
                 row[s] = None
+
+
+def _extra_contiguous_run_on_day(grid: Chromosome, day: int, slot: int) -> tuple[int, int] | None:
+    """
+    Maximal inclusive [left, right] of consecutive slots on this day with the same extra_class_id
+    as grid[day][slot]. Required so compaction/mutation never pull one slot off a 2-slot extra block.
+    """
+    row = grid[day]
+    cell = row[slot]
+    if not cell or cell[0] != "extra":
+        return None
+    eid = cell[1]
+    left = slot
+    while left - 1 >= 0 and row[left - 1] and row[left - 1][0] == "extra" and row[left - 1][1] == eid:
+        left -= 1
+    right = slot
+    while right + 1 < len(row) and row[right + 1] and row[right + 1][0] == "extra" and row[right + 1][1] == eid:
+        right += 1
+    return left, right
+
+
+def _lab_starts_scattered_order(valid_starts: list[int], rng: random.Random, day_index: int) -> list[int]:
+    """Prefer later slot indices first so repair/initial placement does not default to period 1–2 every day."""
+    if not valid_starts:
+        return []
+    hi = [s for s in valid_starts if s >= 2]
+    lo = [s for s in valid_starts if s < 2]
+    rng.shuffle(hi)
+    rng.shuffle(lo)
+    if len(hi) > 1:
+        off = day_index % len(hi)
+        hi = hi[off:] + hi[:off]
+    if hi and lo:
+        # Usually try later bands first; sometimes lead with early starts so tight grids still succeed.
+        if rng.random() < 0.62:
+            return hi + lo
+        return lo + hi
+    return hi + lo
+
+
+def _scattered_lab_placement_candidates(
+    working_days: int, valid_starts: list[int], rng: random.Random
+) -> list[tuple[int, int]]:
+    """(day, start_slot) pairs with later starts preferred per day, days shuffled."""
+    out: list[tuple[int, int]] = []
+    days_order = list(range(working_days))
+    rng.shuffle(days_order)
+    for d in days_order:
+        for s in _lab_starts_scattered_order(valid_starts, rng, d):
+            out.append((d, s))
+    return out
 
 
 def _extra_consecutive_structure_ok(chromosome: Chromosome, ex: ExtraDemand) -> bool:
@@ -764,8 +833,9 @@ def _repair_chromosome(
             # lab needs exactly 4 cells => two blocks; only use start slots not separated by a break
             while placed < 4:
                 # Prefer non-overwrite placement first, then allow eviction.
-                candidates = [(d, s) for d in range(working_days) for s in valid_lab_starts_repair]
-                rng.shuffle(candidates)
+                candidates = _scattered_lab_placement_candidates(
+                    working_days, valid_lab_starts_repair, rng
+                )
                 success = False
                 used_days = {d for d in range(working_days) if _lab_count_in_day(repaired, lab.subject_id, d) > 0}
                 for day, start in candidates:
@@ -806,8 +876,7 @@ def _repair_chromosome(
                 for day in days:
                     if placed_blocks >= 2:
                         break
-                    starts = list(valid_lab_starts_repair)
-                    rng.shuffle(starts)
+                    starts = _lab_starts_scattered_order(valid_lab_starts_repair, rng, day)
                     for start in starts:
                         if _force_place_lab_block(repaired, lab, day, start, availability, allow_overwrite=True, break_after_slots=break_after_slots):
                             placed_blocks += 1
@@ -817,8 +886,9 @@ def _repair_chromosome(
                 while attempts < 200 and not _lab_blocks_valid(repaired, lab.subject_id):
                     _clear_lab(repaired, lab.subject_id)
                     placed_blocks = 0
-                    candidates = [(d, s) for d in range(working_days) for s in valid_lab_starts_repair]
-                    rng.shuffle(candidates)
+                    candidates = _scattered_lab_placement_candidates(
+                        working_days, valid_lab_starts_repair, rng
+                    )
                     for day, start in candidates:
                         if placed_blocks >= 2:
                             break
@@ -1056,7 +1126,8 @@ def generate_initial_population(
             attempts = 0
             while blocks_needed > 0 and attempts < 500:
                 day = rng.randrange(working_days)
-                start = rng.choice(valid_lab_starts)
+                starts_order = _lab_starts_scattered_order(valid_lab_starts, rng, day)
+                start = rng.choice(starts_order)
                 if _place_lab_block(grid, lab, day, start, faculty_availability, break_after_slots=break_after_slots):
                     blocks_needed -= 1
                 attempts += 1
@@ -1184,6 +1255,10 @@ def calculate_fitness(
         # each lab should produce exactly 2 blocks and each must be length 2
         if len(blocks) != 2 or any(len(b) != 2 for b in blocks):
             penalty += PENALTY_LAB_NOT_CONSECUTIVE
+        else:
+            for b in blocks:
+                if b[0][1] == 0:
+                    penalty += PENALTY_LAB_BLOCK_AT_FIRST_SLOT
         # Per-day: lab occupies only 2 slots/day (so the two blocks must be on different days)
         for day in range(len(chromosome)):
             if _lab_count_in_day(chromosome, lab.subject_id, day) > 2:
@@ -1326,7 +1401,8 @@ def mutation(
             attempts = 0
             while attempts < 80:
                 day = rng.randrange(working_days)
-                start = rng.choice(valid_lab_starts)
+                starts_order = _lab_starts_scattered_order(valid_lab_starts, rng, day)
+                start = rng.choice(starts_order)
                 if _place_lab_block(grid, lab, day, start, faculty_availability, break_after_slots=break_after_slots):
                     break
                 attempts += 1
@@ -1343,6 +1419,63 @@ def mutation(
                     ex_move = next((e for e in extra_demands if e.extra_class_id == cell[1]), None)
                     if ex_move:
                         mn = _extra_min_slot_0(ex_move.preferred_after_slot)
+                        run = _extra_contiguous_run_on_day(grid, d1, s1)
+                        if run:
+                            L, R = run
+                            run_len = R - L + 1
+                            if run_len > 1:
+                                saved = [grid[d1][u] for u in range(L, R + 1)]
+                                for u in range(L, R + 1):
+                                    grid[d1][u] = None
+                                moved = False
+                                for _ in range(160):
+                                    d2 = rng.randrange(working_days)
+                                    last_t = _last_theory_lab_slot_on_day(grid, d2)
+                                    cand = [
+                                        s
+                                        for s in _valid_extra_block_starts_len(
+                                            mn, run_len, slots_per_day, break_after_slots
+                                        )
+                                        if s > last_t
+                                    ]
+                                    if not cand:
+                                        continue
+                                    s2 = rng.choice(cand)
+                                    if _can_place_extra_chunk_at(
+                                        grid,
+                                        ex_move,
+                                        d2,
+                                        s2,
+                                        run_len,
+                                        mn,
+                                        break_after_slots,
+                                        faculty_availability,
+                                        require_empty=True,
+                                    ) and _place_extra_block(
+                                        grid,
+                                        ex_move,
+                                        d2,
+                                        s2,
+                                        faculty_availability,
+                                        break_after_slots,
+                                        block_len=run_len,
+                                    ):
+                                        moved = True
+                                        break
+                                if not moved:
+                                    for u, orig in zip(range(L, R + 1), saved):
+                                        grid[d1][u] = orig
+                                return _repair_chromosome(
+                                    grid,
+                                    working_days,
+                                    slots_per_day,
+                                    theory_demands,
+                                    lab_demands,
+                                    extra_demands,
+                                    faculty_availability,
+                                    rng,
+                                    break_after_slots=break_after_slots,
+                                )
                         empty_pool = [(d, s) for d, s in coords_empty if s >= mn]
                 if not empty_pool:
                     return _repair_chromosome(
