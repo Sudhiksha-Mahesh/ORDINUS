@@ -21,7 +21,8 @@ async def generate_timetable(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Generate timetable for the given class using backtracking.
+    Generate timetable for the given class using backtracking (subjects), then place
+    extra-class slots from configured extra classes (hours/week, consecutive, preferred slot).
     Returns success and message; use GET /timetable/{class_id} to fetch grid.
     """
     entries = await svc.generate_timetable_for_class(db, body.class_id)
@@ -42,7 +43,8 @@ async def generate_timetable_ga(
     Generate timetable using Genetic Algorithm.
     Returns { "Monday": [ {"name": "Math", "faculty": ["Staff1"]}, ... ], ... }.
     Theory: 3 hrs/week max 1/day, 1 faculty. Lab: 4 hrs as 2+2 consecutive, 2 faculty.
-    Extra classes by hours_per_week. Persists to DB.
+    Extra classes: hours/week, not before slot 4, preferred-after, consecutive block without breaks.
+    Persists to DB.
     """
     result = await svc.generate_timetable_ga(
         db,

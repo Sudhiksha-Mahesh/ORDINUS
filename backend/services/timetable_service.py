@@ -23,6 +23,88 @@ from services.genetic_scheduler import (
 )
 
 
+def _extra_min_slot_0_bt(preferred_after_slot: int | None) -> int:
+    """Minimum 0-based slot for extras: not before 1-based period 4; optional preferred-after."""
+    lo = 3
+    if preferred_after_slot is None:
+        return lo
+    return max(lo, int(preferred_after_slot))
+
+
+def _extra_block_has_break_bt(break_after_1based: list[int], start_0: int, length: int) -> bool:
+    """True if a class break sits between two consecutive slots in the block."""
+    if length <= 1 or not break_after_1based:
+        return False
+    for k in range(length - 1):
+        if (start_0 + k + 1) in break_after_1based:
+            return True
+    return False
+
+
+def _place_extra_classes_after_subjects(
+    assignments: list[SlotAssignment],
+    extra_classes: list[ExtraClass],
+    working_days: int,
+    slots_per_day: int,
+    break_after_1based: list[int],
+    availability_sets: dict[int, set[tuple[int, int]]],
+) -> list[tuple[int, int, int, int | None]] | None:
+    """
+    Greedy placement of extra-class slots on empty cells.
+    Returns [(day, slot, extra_class_id, faculty_id_or_none), ...] or None if impossible.
+    """
+    occ: set[tuple[int, int]] = {(a.day, a.slot) for a in assignments}
+    out: list[tuple[int, int, int, int | None]] = []
+
+    for ec in sorted(extra_classes, key=lambda e: (-e.hours_per_week, e.id)):
+        mn = _extra_min_slot_0_bt(ec.preferred_after_slot)
+        L = ec.hours_per_week
+        fid = ec.faculty_id
+        fac_set = availability_sets.get(fid) if fid else None
+
+        def slot_free_and_faculty(day: int, slot: int) -> bool:
+            if (day, slot) in occ:
+                return False
+            if fid and fac_set is not None and (day, slot) not in fac_set:
+                return False
+            return True
+
+        if ec.consecutive and L > 1:
+            if mn + L > slots_per_day:
+                return None
+            placed = False
+            for day in range(working_days):
+                for start in range(mn, slots_per_day - L + 1):
+                    if _extra_block_has_break_bt(break_after_1based, start, L):
+                        continue
+                    if all(slot_free_and_faculty(day, start + i) for i in range(L)):
+                        for i in range(L):
+                            occ.add((day, start + i))
+                            out.append((day, start + i, ec.id, fid))
+                        placed = True
+                        break
+                if placed:
+                    break
+            if not placed:
+                return None
+        else:
+            for _ in range(L):
+                one = False
+                for day in range(working_days):
+                    for slot in range(mn, slots_per_day):
+                        if slot_free_and_faculty(day, slot):
+                            occ.add((day, slot))
+                            out.append((day, slot, ec.id, fid))
+                            one = True
+                            break
+                    if one:
+                        break
+                if not one:
+                    return None
+
+    return out
+
+
 async def _get_faculty_availability_for_scheduling(
     db: AsyncSession,
 ) -> dict[int, list[tuple[int, int]]]:
@@ -91,11 +173,40 @@ async def generate_timetable_for_class(db: AsyncSession, class_id: int) -> list[
     if not assignments:
         return None
 
+    extra_result = await db.execute(select(ExtraClass).where(ExtraClass.class_id == class_id))
+    extra_classes = list(extra_result.scalars().all())
+
+    break_after_1based: list[int] = []
+    if getattr(class_, "break_after_slot_1", None) is not None:
+        break_after_1based.append(class_.break_after_slot_1)
+    if getattr(class_, "break_after_slot_2", None) is not None:
+        break_after_1based.append(class_.break_after_slot_2)
+    break_after_1based = sorted(set(break_after_1based))
+
+    extra_faculty_ids = {ec.faculty_id for ec in extra_classes if ec.faculty_id}
+    availability_sets: dict[int, set[tuple[int, int]]] = {}
+    for fid in faculty_ids_needed | extra_faculty_ids:
+        av_list = availability.get(fid)
+        if not av_list:
+            av_list = list(all_slots)
+        availability_sets[fid] = set(av_list)
+
+    extra_placements = _place_extra_classes_after_subjects(
+        assignments,
+        extra_classes,
+        working_days,
+        slots_per_day,
+        break_after_1based,
+        availability_sets,
+    )
+    if extra_placements is None:
+        return None
+
     # Delete existing timetable for this class
     await db.execute(delete(Timetable).where(Timetable.class_id == class_id))
     await db.flush()
 
-    # Insert new
+    # Insert new (subjects + extra classes)
     new_entries: list[Timetable] = []
     for a in assignments:
         t = Timetable(
@@ -104,6 +215,18 @@ async def generate_timetable_for_class(db: AsyncSession, class_id: int) -> list[
             slot=a.slot,
             subject_id=a.subject_id,
             faculty_id=a.faculty_id,
+        )
+        db.add(t)
+        new_entries.append(t)
+    for day, slot, extra_id, fac_id in extra_placements:
+        t = Timetable(
+            class_id=class_id,
+            day=day,
+            slot=slot,
+            subject_id=None,
+            extra_class_id=extra_id,
+            faculty_id=fac_id,
+            faculty_ids=None,
         )
         db.add(t)
         new_entries.append(t)
@@ -244,6 +367,8 @@ async def generate_timetable_ga(
                 faculty_id=ec.faculty_id,
                 name=ec.name,
                 hours_per_week=ec.hours_per_week,
+                consecutive=bool(getattr(ec, "consecutive", False)),
+                preferred_after_slot=getattr(ec, "preferred_after_slot", None),
             )
         )
         extra_id_to_name[ec.id] = ec.name

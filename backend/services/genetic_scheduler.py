@@ -9,7 +9,9 @@ Gene: one slot assignment (day, slot) -> theory subject | lab | extra class.
 Hard rules we try to satisfy during construction/mutation (and penalize when violated):
 - Theory: 3 hours/week, max 1 hour/day, exactly 1 faculty.
 - Lab: 4 hours/week, scheduled as 2 blocks × 2 consecutive slots, exactly 2 faculty in each lab cell.
-- Extra classes: hours_per_week, scheduled as single slots with assigned faculty.
+- Extra classes: hours_per_week; slots not before period 4; optional preferred-after slot;
+  consecutive=True => one contiguous block per week on a single day, not split by class breaks;
+  optional assigned faculty.
 - Faculty: no double booking (across classes via faculty_used_elsewhere), respect availability.
 """
 
@@ -42,6 +44,9 @@ PENALTY_THEORY_MORE_THAN_1_PER_DAY = 100
 PENALTY_WEEKLY_HOURS_NOT_MET = 150
 PENALTY_LAB_MISSING_TWO_STAFF = 150
 PENALTY_EXTRA_CLASS_HOURS_MISSING = 80
+PENALTY_EXTRA_WRONG_SLOT = 120
+PENALTY_EXTRA_NOT_CONSECUTIVE_BLOCK = 110
+PENALTY_EXTRA_BREAK_IN_BLOCK = 180
 PENALTY_EMPTY_SLOT = 10
 PENALTY_LAB_SEPARATED_BY_BREAK = 180
 
@@ -73,6 +78,152 @@ class ExtraDemand:
     faculty_id: int | None
     name: str
     hours_per_week: int
+    consecutive: bool = False
+    # 1-based "after n-th slot" from UI; first allowed 0-based slot index is max(3, n) — never before period 4.
+    preferred_after_slot: int | None = None
+
+
+def _extra_min_slot_0(preferred_after_slot: int | None) -> int:
+    """Minimum 0-based slot index for extra classes (not before 1-based slot 4)."""
+    lo = 3
+    if preferred_after_slot is None:
+        return lo
+    return max(lo, int(preferred_after_slot))
+
+
+def _extra_block_has_internal_break(
+    break_after_slots: list[int] | None, start_slot: int, length: int
+) -> bool:
+    """True if a class break falls between two consecutive slots in [start, start+length)."""
+    if length <= 1 or not break_after_slots:
+        return False
+    for k in range(length - 1):
+        if _break_separates_lab(break_after_slots, start_slot + k):
+            return True
+    return False
+
+
+def _valid_extra_block_starts(
+    ex: ExtraDemand, slots_per_day: int, break_after_slots: list[int] | None
+) -> list[int]:
+    """0-based start indices for a contiguous block of length hours_per_week."""
+    mn = _extra_min_slot_0(ex.preferred_after_slot)
+    L = ex.hours_per_week
+    if L <= 0:
+        return []
+    out: list[int] = []
+    for s in range(mn, slots_per_day - L + 1):
+        if _extra_block_has_internal_break(break_after_slots, s, L):
+            continue
+        out.append(s)
+    return out
+
+
+def _place_extra_block(
+    grid: Chromosome,
+    ex: ExtraDemand,
+    day: int,
+    start_slot: int,
+    availability: dict[int, set[DaySlot]],
+    break_after_slots: list[int] | None,
+) -> bool:
+    L = ex.hours_per_week
+    if L <= 0:
+        return False
+    slots_per_day = len(grid[day])
+    mn = _extra_min_slot_0(ex.preferred_after_slot)
+    if start_slot < mn or start_slot + L > slots_per_day:
+        return False
+    if _extra_block_has_internal_break(break_after_slots, start_slot, L):
+        return False
+    cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,) if ex.faculty_id else ())
+    for i in range(L):
+        if grid[day][start_slot + i] is not None:
+            return False
+    for i in range(L):
+        for fid in cell[2]:
+            if not _faculty_available_at(fid, day, start_slot + i, availability):
+                return False
+    for i in range(L):
+        grid[day][start_slot + i] = cell
+    return True
+
+
+def _force_place_extra_block(
+    grid: Chromosome,
+    ex: ExtraDemand,
+    day: int,
+    start_slot: int,
+    availability: dict[int, set[DaySlot]],
+    *,
+    allow_overwrite: bool,
+    break_after_slots: list[int] | None,
+) -> bool:
+    L = ex.hours_per_week
+    if L <= 0:
+        return False
+    row = grid[day]
+    slots_per_day = len(row)
+    mn = _extra_min_slot_0(ex.preferred_after_slot)
+    if start_slot < mn or start_slot + L > slots_per_day:
+        return False
+    if _extra_block_has_internal_break(break_after_slots, start_slot, L):
+        return False
+    cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,) if ex.faculty_id else ())
+    for i in range(L):
+        slot = start_slot + i
+        existing = row[slot]
+        if existing is not None:
+            if not allow_overwrite:
+                return False
+            if existing[0] == "lab":
+                return False
+    if not allow_overwrite:
+        return _place_extra_block(grid, ex, day, start_slot, availability, break_after_slots)
+    for i in range(L):
+        slot = start_slot + i
+        _clear_lab_run_at(grid, day, slot)
+        if row[slot] is not None:
+            row[slot] = None
+    for i in range(L):
+        for fid in cell[2]:
+            if not _faculty_available_at(fid, day, start_slot + i, availability):
+                return False
+    for i in range(L):
+        row[start_slot + i] = cell
+    return True
+
+
+def _clear_extra(grid: Chromosome, extra_class_id: int) -> None:
+    for d, row in enumerate(grid):
+        for s in range(len(row)):
+            cell = row[s]
+            if cell and cell[0] == "extra" and cell[1] == extra_class_id:
+                row[s] = None
+
+
+def _extra_consecutive_structure_ok(chromosome: Chromosome, ex: ExtraDemand) -> bool:
+    """If consecutive=True and hours>1, all hours must be one contiguous block on a single day."""
+    L = ex.hours_per_week
+    if L <= 1 or not ex.consecutive:
+        return True
+    coords = [(d, s) for d, s, c in _iter_cells(chromosome) if c[0] == "extra" and c[1] == ex.extra_class_id]
+    if len(coords) != L:
+        return False
+    days = {d for d, _ in coords}
+    if len(days) != 1:
+        return False
+    day = next(iter(days))
+    slots = sorted(s for d, s in coords if d == day)
+    return slots == list(range(slots[0], slots[0] + L))
+
+
+def _extra_slots_respect_min(chromosome: Chromosome, ex: ExtraDemand) -> bool:
+    mn = _extra_min_slot_0(ex.preferred_after_slot)
+    for d, s, c in _iter_cells(chromosome):
+        if c[0] == "extra" and c[1] == ex.extra_class_id and s < mn:
+            return False
+    return True
 
 
 def _make_empty_grid(working_days: int, slots_per_day: int) -> Chromosome:
@@ -502,40 +653,88 @@ def _repair_chromosome(
             for d, s in coords[3:]:
                 repaired[d][s] = None
 
-    # Extra: enforce weekly hours
+    # Extra: enforce weekly hours, allowed slots (>= 4th period), preferred-after, consecutive blocks
     for ex in extra_demands:
         cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,) if ex.faculty_id else ())
-        # Remove malformed extras
+        mn = _extra_min_slot_0(ex.preferred_after_slot)
+
+        # Remove malformed extras (wrong staff, wrong slot, or bad consecutive structure)
         for d, s, c in list(_iter_cells(repaired)):
-            if c[0] == "extra" and c[1] == ex.extra_class_id:
-                if ex.faculty_id:
-                    if len(c[2]) != 1 or c[2][0] != ex.faculty_id:
-                        repaired[d][s] = None
-                else:
-                    if len(c[2]) != 0:
-                        repaired[d][s] = None
+            if c[0] != "extra" or c[1] != ex.extra_class_id:
+                continue
+            bad = False
+            if ex.faculty_id:
+                if len(c[2]) != 1 or c[2][0] != ex.faculty_id:
+                    bad = True
+            elif len(c[2]) != 0:
+                bad = True
+            if s < mn:
+                bad = True
+            if bad:
+                repaired[d][s] = None
+
+        if ex.consecutive and ex.hours_per_week > 1 and not _extra_consecutive_structure_ok(repaired, ex):
+            _clear_extra(repaired, ex.extra_class_id)
+        # Break inside a contiguous extra block (same day)
+        if ex.consecutive and ex.hours_per_week > 1 and break_after_slots:
+            by_day_break: dict[int, list[int]] = {}
+            for d, s, c in _iter_cells(repaired):
+                if c[0] == "extra" and c[1] == ex.extra_class_id:
+                    by_day_break.setdefault(d, []).append(s)
+            for _d, slots in by_day_break.items():
+                slots.sort()
+                if len(slots) == ex.hours_per_week and slots == list(range(slots[0], slots[0] + len(slots))):
+                    if _extra_block_has_internal_break(break_after_slots, slots[0], len(slots)):
+                        _clear_extra(repaired, ex.extra_class_id)
+                        break
 
         placed = _count_weekly(repaired, "extra", ex.extra_class_id)
-        while placed < ex.hours_per_week:
-            candidates = [(d, s) for d in range(working_days) for s in range(slots_per_day)]
-            rng.shuffle(candidates)
-            success = False
-            # try without eviction
-            for day, slot in candidates:
-                if _force_place_if_available(repaired, day, slot, cell, availability, allow_overwrite=False):
-                    placed += 1
-                    success = True
+
+        if ex.consecutive and ex.hours_per_week > 1:
+            valid_starts = _valid_extra_block_starts(ex, slots_per_day, break_after_slots)
+            while placed < ex.hours_per_week:
+                candidates = [(d, s) for d in range(working_days) for s in valid_starts]
+                rng.shuffle(candidates)
+                success = False
+                for day, start in candidates:
+                    if _force_place_extra_block(
+                        repaired, ex, day, start, availability, allow_overwrite=False, break_after_slots=break_after_slots
+                    ):
+                        placed = _count_weekly(repaired, "extra", ex.extra_class_id)
+                        success = True
+                        break
+                if success:
+                    continue
+                for day, start in candidates:
+                    if _force_place_extra_block(
+                        repaired, ex, day, start, availability, allow_overwrite=True, break_after_slots=break_after_slots
+                    ):
+                        placed = _count_weekly(repaired, "extra", ex.extra_class_id)
+                        success = True
+                        break
+                if not success:
                     break
-            if success:
-                continue
-            # then with eviction
-            for day, slot in candidates:
-                if _force_place_if_available(repaired, day, slot, cell, availability, allow_overwrite=True):
-                    placed = _count_weekly(repaired, "extra", ex.extra_class_id)
-                    success = True
+        else:
+            allowed_slots = list(range(mn, slots_per_day))
+            while placed < ex.hours_per_week:
+                candidates = [(d, s) for d in range(working_days) for s in allowed_slots]
+                rng.shuffle(candidates)
+                success = False
+                for day, slot in candidates:
+                    if _force_place_if_available(repaired, day, slot, cell, availability, allow_overwrite=False):
+                        placed += 1
+                        success = True
+                        break
+                if success:
+                    continue
+                for day, slot in candidates:
+                    if _force_place_if_available(repaired, day, slot, cell, availability, allow_overwrite=True):
+                        placed = _count_weekly(repaired, "extra", ex.extra_class_id)
+                        success = True
+                        break
+                if not success:
                     break
-            if not success:
-                break
+
         if placed > ex.hours_per_week:
             coords = [(d, s) for d, s, c in _iter_cells(repaired) if c[0] == "extra" and c[1] == ex.extra_class_id]
             rng.shuffle(coords)
@@ -607,19 +806,33 @@ def generate_initial_population(
                     placed += 1
                 attempts += 1
 
-        # Place extras
+        # Place extras (allowed slots >= 4th period; optional consecutive block without breaks inside)
         extras = extra_demands[:]
         rng.shuffle(extras)
         for ex in extras:
             cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,) if ex.faculty_id else ())
-            placed = 0
-            attempts = 0
-            while placed < ex.hours_per_week and attempts < 600:
-                day = rng.randrange(working_days)
-                slot = rng.randrange(slots_per_day)
-                if _place_if_valid(grid, day, slot, cell, faculty_availability):
-                    placed += 1
-                attempts += 1
+            mn = _extra_min_slot_0(ex.preferred_after_slot)
+            if ex.consecutive and ex.hours_per_week > 1:
+                placed = 0
+                attempts = 0
+                valid_starts = _valid_extra_block_starts(ex, slots_per_day, break_after_slots)
+                if not valid_starts:
+                    continue
+                while placed < 1 and attempts < 400:
+                    day = rng.randrange(working_days)
+                    start = rng.choice(valid_starts)
+                    if _place_extra_block(grid, ex, day, start, faculty_availability, break_after_slots):
+                        placed = 1
+                    attempts += 1
+            else:
+                placed = 0
+                attempts = 0
+                while placed < ex.hours_per_week and attempts < 600:
+                    day = rng.randrange(working_days)
+                    slot = rng.randrange(mn, slots_per_day)
+                    if _place_if_valid(grid, day, slot, cell, faculty_availability):
+                        placed += 1
+                    attempts += 1
 
         population.append(_repair_chromosome(grid, working_days, slots_per_day, theory_demands, lab_demands, extra_demands, faculty_availability, rng, break_after_slots=break_after_slots))
     return population
@@ -694,10 +907,28 @@ def calculate_fitness(
                     if _break_separates_lab(break_after_slots, start_slot):
                         penalty += PENALTY_LAB_SEPARATED_BY_BREAK
 
-    # extras weekly hours
+    # extras weekly hours + slot / consecutive / break rules
     for ex in extra_demands:
         if _count_weekly(chromosome, "extra", ex.extra_class_id) != ex.hours_per_week:
             penalty += PENALTY_EXTRA_CLASS_HOURS_MISSING
+        if not _extra_slots_respect_min(chromosome, ex):
+            penalty += PENALTY_EXTRA_WRONG_SLOT
+        if ex.consecutive and ex.hours_per_week > 1 and not _extra_consecutive_structure_ok(chromosome, ex):
+            penalty += PENALTY_EXTRA_NOT_CONSECUTIVE_BLOCK
+        if ex.consecutive and ex.hours_per_week > 1 and break_after_slots:
+            coords = [
+                (d, s)
+                for d, s, c in _iter_cells(chromosome)
+                if c[0] == "extra" and c[1] == ex.extra_class_id
+            ]
+            by_day: dict[int, list[int]] = {}
+            for d, s in coords:
+                by_day.setdefault(d, []).append(s)
+            for d, slots in by_day.items():
+                slots.sort()
+                if len(slots) == ex.hours_per_week and slots == list(range(slots[0], slots[0] + len(slots))):
+                    if _extra_block_has_internal_break(break_after_slots, slots[0], len(slots)):
+                        penalty += PENALTY_EXTRA_BREAK_IN_BLOCK
 
     # empty slots (soft)
     empty = sum(1 for row in chromosome for cell in row if cell is None)
@@ -800,7 +1031,25 @@ def mutation(
             d1, s1 = rng.choice(coords_filled)
             cell = grid[d1][s1]
             if cell and cell[0] in ("theory", "extra"):
-                d2, s2 = rng.choice(coords_empty)
+                empty_pool = coords_empty
+                if cell[0] == "extra":
+                    ex_move = next((e for e in extra_demands if e.extra_class_id == cell[1]), None)
+                    if ex_move:
+                        mn = _extra_min_slot_0(ex_move.preferred_after_slot)
+                        empty_pool = [(d, s) for d, s in coords_empty if s >= mn]
+                if not empty_pool:
+                    return _repair_chromosome(
+                        grid,
+                        working_days,
+                        slots_per_day,
+                        theory_demands,
+                        lab_demands,
+                        extra_demands,
+                        faculty_availability,
+                        rng,
+                        break_after_slots=break_after_slots,
+                    )
+                d2, s2 = rng.choice(empty_pool)
                 # for theory ensure still max 1/day (soft; repair will fix)
                 if cell[0] == "theory":
                     subj_id = cell[1]
