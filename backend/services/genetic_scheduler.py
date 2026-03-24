@@ -70,7 +70,7 @@ class LabDemand:
 @dataclass(frozen=True, slots=True)
 class ExtraDemand:
     extra_class_id: int
-    faculty_id: int
+    faculty_id: int | None
     name: str
     hours_per_week: int
 
@@ -504,12 +504,16 @@ def _repair_chromosome(
 
     # Extra: enforce weekly hours
     for ex in extra_demands:
-        cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,))
+        cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,) if ex.faculty_id else ())
         # Remove malformed extras
         for d, s, c in list(_iter_cells(repaired)):
             if c[0] == "extra" and c[1] == ex.extra_class_id:
-                if len(c[2]) != 1 or c[2][0] != ex.faculty_id:
-                    repaired[d][s] = None
+                if ex.faculty_id:
+                    if len(c[2]) != 1 or c[2][0] != ex.faculty_id:
+                        repaired[d][s] = None
+                else:
+                    if len(c[2]) != 0:
+                        repaired[d][s] = None
 
         placed = _count_weekly(repaired, "extra", ex.extra_class_id)
         while placed < ex.hours_per_week:
@@ -607,7 +611,7 @@ def generate_initial_population(
         extras = extra_demands[:]
         rng.shuffle(extras)
         for ex in extras:
-            cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,))
+            cell: SlotCell = ("extra", ex.extra_class_id, (ex.faculty_id,) if ex.faculty_id else ())
             placed = 0
             attempts = 0
             while placed < ex.hours_per_week and attempts < 600:

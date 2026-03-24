@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Plus, Save, Trash2 } from 'lucide-react'
-import { subjectApi, classApi, facultyApi, type Subject, type Class, type ClassSubject, type Faculty, type SubjectType } from '../services/api'
+import { subjectApi, classApi, facultyApi, extraClassApi, type Subject, type Class, type ClassSubject, type Faculty, type SubjectType, type ExtraClass } from '../services/api'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Field, NumberInput, Select, TextInput } from '../components/ui/Form'
@@ -26,10 +26,25 @@ export default function SubjectManagement() {
   })
   const [editing, setEditing] = useState<Subject | null>(null)
   const [classSubjects, setClassSubjects] = useState<ClassSubject[]>([])
+  const [extraClasses, setExtraClasses] = useState<ExtraClass[]>([])
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null)
   const [addToClassForm, setAddToClassForm] = useState({ subject_id: '', hours_per_week: 6 })
+  const [extraClassForm, setExtraClassForm] = useState<{
+    name: string
+    faculty_id: string
+    hours_per_week: number
+    consecutive: boolean
+    preferred_after_slot: string
+  }>({
+    name: '',
+    faculty_id: '',
+    hours_per_week: 1,
+    consecutive: false,
+    preferred_after_slot: '',
+  })
   const [subjectSubmitAttempted, setSubjectSubmitAttempted] = useState(false)
   const [assignSubmitAttempted, setAssignSubmitAttempted] = useState(false)
+  const [extraSubmitAttempted, setExtraSubmitAttempted] = useState(false)
 
   const loadSubjects = () => subjectApi.list().then(setSubjects).catch(() => setSubjects([]))
   const loadClasses = () => classApi.list().then(setClasses).catch(() => setClasses([]))
@@ -42,8 +57,10 @@ export default function SubjectManagement() {
   useEffect(() => {
     if (selectedClassId != null) {
       subjectApi.listByClass(selectedClassId).then(setClassSubjects).catch(() => setClassSubjects([]))
+      extraClassApi.listByClass(selectedClassId).then(setExtraClasses).catch(() => setExtraClasses([]))
     } else {
       setClassSubjects([])
+      setExtraClasses([])
     }
   }, [selectedClassId])
 
@@ -157,6 +174,49 @@ export default function SubjectManagement() {
     subjectApi.removeFromClass(selectedClassId, subjectId).then(() =>
       subjectApi.listByClass(selectedClassId).then(setClassSubjects)
     ).catch((err) => alert(err.message))
+  }
+
+  const selectedClass = selectedClassId != null ? classes.find((c) => c.id === selectedClassId) : undefined
+  const preferredSlotOptions =
+    selectedClass != null
+      ? Array.from({ length: Math.max(0, selectedClass.slots_per_day - 1) }, (_, i) => i + 1)
+      : []
+
+  const handleAddExtraClass = (e: React.FormEvent) => {
+    e.preventDefault()
+    setExtraSubmitAttempted(true)
+    if (selectedClassId == null) return
+    if (!extraClassForm.name.trim()) return
+    extraClassApi
+      .create(selectedClassId, {
+        name: extraClassForm.name.trim(),
+        faculty_id: extraClassForm.faculty_id ? Number(extraClassForm.faculty_id) : null,
+        hours_per_week: Number(extraClassForm.hours_per_week) || 1,
+        consecutive: Boolean(extraClassForm.consecutive),
+        preferred_after_slot: extraClassForm.preferred_after_slot
+          ? Number(extraClassForm.preferred_after_slot)
+          : null,
+      })
+      .then(() => {
+        setExtraClassForm({
+          name: '',
+          faculty_id: '',
+          hours_per_week: 1,
+          consecutive: false,
+          preferred_after_slot: '',
+        })
+        setExtraSubmitAttempted(false)
+        extraClassApi.listByClass(selectedClassId).then(setExtraClasses)
+      })
+      .catch((err) => alert(err.message))
+  }
+
+  const removeExtraClass = (extraClassId: number) => {
+    if (selectedClassId == null) return
+    extraClassApi
+      .delete(selectedClassId, extraClassId)
+      .then(() => extraClassApi.listByClass(selectedClassId).then(setExtraClasses))
+      .catch((err) => alert(err.message))
   }
 
   return (
@@ -388,6 +448,133 @@ export default function SubjectManagement() {
                       </Button>
                     </div>
                   </form>
+
+                  <div className="pt-4">
+                    <div className="text-sm font-semibold text-slate-900">Extra classes</div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Configure non-subject activities (e.g. Library, PED). Staff is optional.
+                    </p>
+
+                    <form
+                      onSubmit={handleAddExtraClass}
+                      className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-12 md:items-end"
+                    >
+                      <Field
+                        label="Extra class name"
+                        required
+                        error={extraSubmitAttempted && !extraClassForm.name.trim() ? 'Name is required.' : undefined}
+                        className="md:col-span-4"
+                      >
+                        <TextInput
+                          value={extraClassForm.name}
+                          onChange={(e) => setExtraClassForm((f) => ({ ...f, name: e.target.value }))}
+                          placeholder="Library"
+                          hasError={extraSubmitAttempted && !extraClassForm.name.trim()}
+                          required
+                        />
+                      </Field>
+
+                      <Field label="Handling staff" className="md:col-span-4">
+                        <Select
+                          value={extraClassForm.faculty_id}
+                          onChange={(e) => setExtraClassForm((f) => ({ ...f, faculty_id: e.target.value }))}
+                        >
+                          <option value="">— None —</option>
+                          {faculties.map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+
+                      <Field label="Slots/week" required className="md:col-span-2">
+                        <NumberInput
+                          min={1}
+                          max={20}
+                          value={extraClassForm.hours_per_week}
+                          onChange={(e) =>
+                            setExtraClassForm((f) => ({ ...f, hours_per_week: Number(e.target.value) }))
+                          }
+                        />
+                      </Field>
+
+                      <Field label="Preferred slot" className="md:col-span-2">
+                        <Select
+                          value={extraClassForm.preferred_after_slot}
+                          onChange={(e) =>
+                            setExtraClassForm((f) => ({ ...f, preferred_after_slot: e.target.value }))
+                          }
+                        >
+                          <option value="">— Any —</option>
+                          {preferredSlotOptions.map((n) => (
+                            <option key={n} value={n}>
+                              After {n}
+                              {n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'} slot
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+
+                      <div className="md:col-span-12 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-200"
+                            checked={extraClassForm.consecutive}
+                            onChange={(e) => setExtraClassForm((f) => ({ ...f, consecutive: e.target.checked }))}
+                          />
+                          Consecutive (do not split by breaks)
+                        </label>
+                        <Button type="submit" variant="secondary">
+                          <Plus className="h-4 w-4" />
+                          Add extra class
+                        </Button>
+                      </div>
+                    </form>
+
+                    <div className="mt-3 rounded-xl border border-slate-200 overflow-hidden bg-white">
+                      {extraClasses.length === 0 ? (
+                        <div className="p-4 text-sm text-slate-600">No extra classes for this class yet.</div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <Table className="min-w-[760px]">
+                            <THead>
+                              <tr>
+                                <TH>Name</TH>
+                                <TH>Staff</TH>
+                                <TH>Slots/week</TH>
+                                <TH>Consecutive</TH>
+                                <TH>Preferred</TH>
+                                <TH className="text-right">Actions</TH>
+                              </tr>
+                            </THead>
+                            <TBody>
+                              {extraClasses.map((ec) => (
+                                <TR key={ec.id}>
+                                  <TD className="font-medium text-slate-900">{ec.name}</TD>
+                                  <TD className="text-slate-600">{ec.faculty_name || '—'}</TD>
+                                  <TD>{ec.hours_per_week}</TD>
+                                  <TD>{ec.consecutive ? 'True' : 'False'}</TD>
+                                  <TD className="text-slate-600 whitespace-nowrap">
+                                    {ec.preferred_after_slot
+                                      ? `After ${ec.preferred_after_slot}${ec.preferred_after_slot === 1 ? 'st' : ec.preferred_after_slot === 2 ? 'nd' : ec.preferred_after_slot === 3 ? 'rd' : 'th'} slot`
+                                      : '—'}
+                                  </TD>
+                                  <TD className="text-right">
+                                    <Button variant="outline" size="sm" onClick={() => removeExtraClass(ec.id)}>
+                                      <Trash2 className="h-4 w-4" />
+                                      Remove
+                                    </Button>
+                                  </TD>
+                                </TR>
+                              ))}
+                            </TBody>
+                          </Table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
                   <div className="pt-2">
                     <div className="flex items-center justify-between gap-3">

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from core.config import settings
-from routers import faculty, classes, subjects, timetable
+from routers import faculty, classes, subjects, timetable, extra_classes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ app.add_middleware(
 app.include_router(faculty.router)
 app.include_router(classes.router)
 app.include_router(subjects.router)
+app.include_router(extra_classes.router)
 app.include_router(timetable.router)
 
 

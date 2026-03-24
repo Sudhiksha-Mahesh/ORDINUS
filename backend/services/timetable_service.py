@@ -238,9 +238,17 @@ async def generate_timetable_ga(
     extra_demands: list[ExtraDemand] = []
     extra_id_to_name: dict[int, str] = {}
     for ec in extra_classes:
-        extra_demands.append(ExtraDemand(extra_class_id=ec.id, faculty_id=ec.faculty_id, name=ec.name, hours_per_week=ec.hours_per_week))
+        extra_demands.append(
+            ExtraDemand(
+                extra_class_id=ec.id,
+                faculty_id=ec.faculty_id,
+                name=ec.name,
+                hours_per_week=ec.hours_per_week,
+            )
+        )
         extra_id_to_name[ec.id] = ec.name
-        faculty_id_to_name[ec.faculty_id] = ""  # will load below if needed
+        if ec.faculty_id:
+            faculty_id_to_name[ec.faculty_id] = ""  # will load below if needed
 
     # Faculty names: load all faculty for this class's subjects and extras
     if not faculty_id_to_name:
@@ -265,8 +273,9 @@ async def generate_timetable_ga(
             if fid not in availability_list or not availability_list[fid]:
                 availability_list[fid] = list(all_slots)
     for d in extra_demands:
-        if d.faculty_id not in availability_list or not availability_list[d.faculty_id]:
-            availability_list[d.faculty_id] = list(all_slots)
+        if d.faculty_id:
+            if d.faculty_id not in availability_list or not availability_list[d.faculty_id]:
+                availability_list[d.faculty_id] = list(all_slots)
     availability_sets = {fid: set(av) for fid, av in availability_list.items()}
 
     # Cross-class faculty usage map to penalize double booking:

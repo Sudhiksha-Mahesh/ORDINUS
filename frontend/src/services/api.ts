@@ -17,7 +17,15 @@ async function request<T>(
   })
   if (res.status === 204) return undefined as T
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.detail || res.statusText || 'Request failed')
+  if (!res.ok) {
+    const detail =
+      typeof data?.detail === 'string'
+        ? data.detail
+        : data?.detail != null
+          ? JSON.stringify(data.detail)
+          : undefined
+    throw new Error(detail || res.statusText || 'Request failed')
+  }
   return data as T
 }
 
@@ -66,6 +74,17 @@ export interface ClassSubject {
   hours_per_week: number
   subject_name?: string
   faculty_name?: string
+}
+
+export interface ExtraClass {
+  id: number
+  class_id: number
+  name: string
+  faculty_id?: number | null
+  faculty_name?: string | null
+  hours_per_week: number
+  consecutive: boolean
+  preferred_after_slot?: number | null
 }
 
 export interface TimetableCell {
@@ -150,6 +169,42 @@ export const subjectApi = {
     }),
   removeFromClass: (classId: number, subjectId: number) =>
     request<void>(`/subjects/classes/${classId}/subjects/${subjectId}`, { method: 'DELETE' }),
+}
+
+export const extraClassApi = {
+  listByClass: (classId: number) =>
+    request<ExtraClass[]>(`/classes/${classId}/extra-classes`),
+  create: (
+    classId: number,
+    body: {
+      name: string
+      faculty_id?: number | null
+      hours_per_week: number
+      consecutive?: boolean
+      preferred_after_slot?: number | null
+    },
+  ) =>
+    request<ExtraClass>(`/classes/${classId}/extra-classes`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  update: (
+    classId: number,
+    extraClassId: number,
+    body: {
+      name?: string
+      faculty_id?: number | null
+      hours_per_week?: number
+      consecutive?: boolean
+      preferred_after_slot?: number | null
+    },
+  ) =>
+    request<ExtraClass>(`/classes/${classId}/extra-classes/${extraClassId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  delete: (classId: number, extraClassId: number) =>
+    request<void>(`/classes/${classId}/extra-classes/${extraClassId}`, { method: 'DELETE' }),
 }
 
 // Timetable
